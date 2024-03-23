@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
+using System;
 
 namespace FASTERCache;
 
@@ -10,10 +11,18 @@ public class ConfigTests
     {
         var services = new ServiceCollection();
         bool configured = false;
-        services.AddFASTERCache(_ => configured = true);
-        var cache = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
-        Assert.IsType<FASTERDistributedCache>(cache);
-        Assert.True(configured);
-
+        services.AddFASTERCache(options =>
+        {
+            options.Directory = "cachedir";
+            configured = true;
+        });
+        FASTERDistributedCache typed;
+        using (var provider = services.BuildServiceProvider())
+        {
+            var cache = provider.GetRequiredService<IDistributedCache>();
+            typed = Assert.IsType<FASTERDistributedCache>(cache);
+            Assert.True(configured);
+        }
+        Assert.True(typed.IsDisposed);
     }
 }

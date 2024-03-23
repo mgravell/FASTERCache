@@ -1,6 +1,7 @@
 ﻿using FASTERCache;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using System;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -10,8 +11,8 @@ public static class FASTERCacheServiceExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(setupAction);
-        services.AddOptions();
+        services.Configure(setupAction)
+            .AddOptionsWithValidateOnStart<FASTERCacheOptions, FASTERCacheOptions.Validator>();
         services.TryAddSingleton<IDistributedCache, FASTERDistributedCache>();
-        services.Configure(setupAction);
     }
 }

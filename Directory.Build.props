@@ -1,6 +1,8 @@
 <Project>
     <PropertyGroup>
         <Nullable>enable</Nullable>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <TargetFrameworks>net6.0;net8.0</TargetFrameworks>
         <RootNamespace>FASTERCache</RootNamespace>
         <Authors>Marc Gravell</Authors>
         <OutputType>Library</OutputType>

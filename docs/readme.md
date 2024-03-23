@@ -6,8 +6,10 @@ providing a file-based local cache that persists between application executions.
 ## Usage
 
 ``` c#
-services.AddFASTERCache(option => {
+services.AddFASTERCache(option =>
+{
     // configure
+    options.Directory = "cache";
 });
 ```
 
