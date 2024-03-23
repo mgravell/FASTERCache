@@ -1,0 +1,7 @@
+<Project>
+    <PropertyGroup>
+        <Deterministic>true</Deterministic>
+        <Nullable>enable</Nullable>
+        <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    </PropertyGroup>
+</Project>

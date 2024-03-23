@@ -1,0 +1,49 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.10.34607.79
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FASTERCache", "src\FASTERCache\FASTERCache.csproj", "{24E877F0-1155-425B-B709-573411DCBA62}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{E667B8C7-4FB3-480A-825E-35E534B3D157}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{D96F0A15-37E6-45EF-BFE5-0AEF7C612C0D}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FASTERCacheTests", "test\FASTERCacheTests\FASTERCacheTests.csproj", "{2388A41A-2889-4DE1-B1EB-BFF139E2388C}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "global", "global", "{5390B2B2-0899-4511-9C4E-9DBB8CEBDFEC}"
+	ProjectSection(SolutionItems) = preProject
+		.gitignore = .gitignore
+		Directory.Build.props = Directory.Build.props
+		Directory.Packages.props = Directory.Packages.props
+		global.json = global.json
+		nuget.config = nuget.config
+		README.md = README.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{24E877F0-1155-425B-B709-573411DCBA62}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{24E877F0-1155-425B-B709-573411DCBA62}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{24E877F0-1155-425B-B709-573411DCBA62}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{24E877F0-1155-425B-B709-573411DCBA62}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2388A41A-2889-4DE1-B1EB-BFF139E2388C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2388A41A-2889-4DE1-B1EB-BFF139E2388C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2388A41A-2889-4DE1-B1EB-BFF139E2388C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2388A41A-2889-4DE1-B1EB-BFF139E2388C}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{24E877F0-1155-425B-B709-573411DCBA62} = {E667B8C7-4FB3-480A-825E-35E534B3D157}
+		{2388A41A-2889-4DE1-B1EB-BFF139E2388C} = {D96F0A15-37E6-45EF-BFE5-0AEF7C612C0D}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {9AE46496-6510-4618-A4BD-C1EA7CE672C2}
+	EndGlobalSection
+EndGlobal
