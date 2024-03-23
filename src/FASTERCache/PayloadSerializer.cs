@@ -4,10 +4,11 @@ using System.IO;
 
 namespace FASTERCache;
 
-internal class BLOBSerializer : BinaryObjectSerializer<ReadOnlySequence<byte>>
+internal class PayloadSerializer : BinaryObjectSerializer<Payload>
 {
-    public override void Deserialize(out ReadOnlySequence<byte> obj)
+    public override void Deserialize(out Payload obj)
     {
+        var expiry = reader.ReadInt64();
         var len = reader.ReadInt32();
         if (len == 0)
         {
@@ -22,19 +23,20 @@ internal class BLOBSerializer : BinaryObjectSerializer<ReadOnlySequence<byte>>
             len -= count;
         }
         if (len != 0) throw new EndOfStreamException();
-        obj = new(arr);
+        obj = new(expiry, arr);
     }
 
-    public override void Serialize(ref ReadOnlySequence<byte> obj)
+    public override void Serialize(ref Payload obj)
     {
-        writer.Write(checked((int)obj.Length));
-        if (obj.IsSingleSegment)
+        writer.Write(obj.ExpiryTicks);
+        writer.Write(checked((int)obj.Value.Length));
+        if (obj.Value.IsSingleSegment)
         {
-            writer.Write(obj.FirstSpan);
+            writer.Write(obj.Value.FirstSpan);
         }
         else
         {
-            foreach (var chunk in obj)
+            foreach (var chunk in obj.Value)
             {
                 writer.Write(chunk.Span);
             }
