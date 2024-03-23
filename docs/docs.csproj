@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- this project exists just to make it easier to work with docs without adding them individually -->
+  </PropertyGroup>
+
+</Project>

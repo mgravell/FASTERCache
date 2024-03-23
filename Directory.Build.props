@@ -1,7 +1,41 @@
 <Project>
     <PropertyGroup>
-        <Deterministic>true</Deterministic>
         <Nullable>enable</Nullable>
+        <RootNamespace>FASTERCache</RootNamespace>
+        <Authors>Marc Gravell</Authors>
+        <OutputType>Library</OutputType>
+        <SignAssembly>true</SignAssembly>
+        <DelaySign>False</DelaySign>
+        <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)FASTERCache.snk</AssemblyOriginatorKeyFile>
+        <Copyright>Marc Gravell, 2024-</Copyright>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/mgravell/FASTERCache</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/mgravell/FASTERCache</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <Product>FASTERCache ($(TargetFramework))</Product>
+        <PackageReleaseNotes>https://github.com/mgravell/FASTERCache/releases/</PackageReleaseNotes>
         <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+        <PackageTags>grpc</PackageTags>
+        <DebugSymbols>true</DebugSymbols>
+        <DebugType>embedded</DebugType>
+        <DefaultLanguage>en-US</DefaultLanguage>
+        <IncludeSymbols>false</IncludeSymbols>
+        <IsTestProject>$(MSBuildProjectName.Contains('Test'))</IsTestProject>
+        <CheckEolTargetFramework>false</CheckEolTargetFramework>
+        <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
+        <PackageReadmeFile>readme.md</PackageReadmeFile>
     </PropertyGroup>
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+        <Deterministic>true</Deterministic>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(Configuration)' == 'Release' and '$(SourceRoot)'==''">
+        <SourceRoot Include="$(MSBuildThisFileDirectory)/"/>
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All"/>
+        <PackageReference Include="Nerdbank.GitVersioning" PrivateAssets="all" />
+        <None Include="../../docs/readme.md" Link="readme.md" Pack="true" PackagePath="/" Visible="false" />
+    </ItemGroup>
 </Project>

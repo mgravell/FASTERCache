@@ -2,11 +2,11 @@
 using Microsoft.Extensions.Options;
 namespace FASTERCache;
 
-internal sealed class FASTERCache : IDistributedCache
+internal sealed class FASTERDistributedCache : IDistributedCache
 {
-    public FASTERCache(IOptions<FASTERCacheOptions> options)
+    public FASTERDistributedCache(IOptions<FASTERCacheOptions> options)
     {
-
+        var config = options.Value;
     }
 
     byte[]? IDistributedCache.Get(string key)

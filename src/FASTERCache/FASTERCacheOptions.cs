@@ -1,6 +1,4 @@
-﻿namespace Microsoft.Extensions.DependencyInjection
+﻿namespace FASTERCache;
+public sealed class FASTERCacheOptions
 {
-    public class FASTERCacheOptions
-    {
-    }
 }
