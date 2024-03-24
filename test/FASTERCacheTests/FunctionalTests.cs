@@ -180,4 +180,39 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         Assert.Null(retrieved);
     }
 
+    [Fact]
+    public async Task SlidingExpirationAsync()
+    {
+        var key = Caller();
+        Assert.Null(await Cache.GetAsync(key));
+        var original = Guid.NewGuid().ToByteArray();
+        await Cache.SetAsync(key, original, slidingOneMinute);
+
+        var retrieved = await Cache.GetAsync(key);
+        Assert.NotNull(retrieved);
+        Assert.Equal(original, retrieved);
+
+        for (int i = 0; i < 5; i++)
+        {
+            fixture.AddTime(TimeSpan.FromMinutes(0.8));
+            retrieved = await Cache.GetAsync(key);
+            Assert.NotNull(retrieved);
+            Assert.Equal(original, retrieved);
+        }
+
+        for (int i = 0; i < 3; i++)
+        {
+            fixture.AddTime(TimeSpan.FromMinutes(0.8));
+            await Cache.RefreshAsync(key);
+        }
+        fixture.AddTime(TimeSpan.FromMinutes(0.8));
+        retrieved = await Cache.GetAsync(key);
+        Assert.NotNull(retrieved);
+        Assert.Equal(original, retrieved);
+
+        fixture.AddTime(TimeSpan.FromMinutes(1.2));
+        retrieved = await Cache.GetAsync(key);
+        Assert.Null(retrieved);
+    }
+
 }
