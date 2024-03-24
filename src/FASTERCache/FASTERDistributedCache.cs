@@ -9,20 +9,20 @@ using System.Threading;
 using System.Threading.Tasks;
 namespace FASTERCache;
 
-internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
+public sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 {
     // heavily influenced by https://github.com/microsoft/FASTER/blob/main/cs/samples/CacheStore/
 
     private readonly FasterKV<string, Payload> _cache;
     private readonly CacheFunctions _functions;
-    public FASTERDistributedCache(IOptions<FASTERCacheOptions> options, IServiceProvider services)
+    public FASTERDistributedCache(IOptions<FASTERCacheOptions> options, IServiceProvider? services)
     {
         var config = options.Value;
         var path = config.Directory;
 #if NET8_0_OR_GREATER
-        _functions = new CacheFunctions(services.GetService<TimeProvider>() ?? TimeProvider.System);
+        _functions = new CacheFunctions(services?.GetService<TimeProvider>() ?? TimeProvider.System);
 #else
-        _functions = new CacheFunctions(services.GetService<ISystemClock>());
+        _functions = new CacheFunctions(services?.GetService<ISystemClock>() ?? new SystemClock());
 #endif
         if (!Directory.Exists(path))
         {
