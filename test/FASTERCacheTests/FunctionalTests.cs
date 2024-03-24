@@ -7,12 +7,11 @@ using System.Threading.Tasks;
 
 namespace FASTERCache;
 
-public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
+public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixture<FunctionalTests.CacheInstance>
 {
-    private readonly CacheInstance fixture;
     private IDistributedCache Cache => fixture.Cache;
-    public FunctionalTests(CacheInstance fixture) => this.fixture = fixture;
-    public class CacheInstance : IDisposable
+
+    public sealed class CacheInstance : IDisposable
     {
         private readonly ServiceProvider provider;
         private readonly IDistributedCache cache;
@@ -97,9 +96,9 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         Assert.Null(await Cache.GetAsync(key));
     }
 
-    DistributedCacheEntryOptions fiveMinutes = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) };
+    private static readonly DistributedCacheEntryOptions RelativeFiveMinutes = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) };
 
-    DistributedCacheEntryOptions slidingOneMinute = new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(1) };
+    private static readonly DistributedCacheEntryOptions SlidingOneMinute = new() { SlidingExpiration = TimeSpan.FromMinutes(1) };
 
     [Fact]
     public void RelativeExpiration()
@@ -107,7 +106,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var key = Caller();
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
-        Cache.Set(key, original, fiveMinutes);
+        Cache.Set(key, original, RelativeFiveMinutes);
 
         var retrieved = Cache.Get(key);
         Assert.NotNull(retrieved);
@@ -129,7 +128,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var key = Caller();
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
-        await Cache.SetAsync(key, original, fiveMinutes);
+        await Cache.SetAsync(key, original, RelativeFiveMinutes);
 
         var retrieved = await Cache.GetAsync(key);
         Assert.NotNull(retrieved);
@@ -151,7 +150,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var key = Caller();
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
-        Cache.Set(key, original, slidingOneMinute);
+        Cache.Set(key, original, SlidingOneMinute);
 
         var retrieved = Cache.Get(key);
         Assert.NotNull(retrieved);
@@ -186,7 +185,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var key = Caller();
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
-        await Cache.SetAsync(key, original, slidingOneMinute);
+        await Cache.SetAsync(key, original, SlidingOneMinute);
 
         var retrieved = await Cache.GetAsync(key);
         Assert.NotNull(retrieved);
