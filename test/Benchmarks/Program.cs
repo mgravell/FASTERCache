@@ -25,10 +25,10 @@ public class CacheBenchmarks : IDisposable
 {
     private readonly IDistributedCache _faster, _sqlite;
 
-    [Params(16, 512)]
+    [Params(128)]
     public int KeyLength { get; set; } = 20;
 
-    [Params(128, 10 * 1024, 1024 * 1024)]
+    [Params(10 * 1024)]
     public int PayloadLength { get; set; } = 1024;
 
     private string key = "";
