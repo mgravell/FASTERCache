@@ -1,5 +1,4 @@
 ﻿using FASTER.core;
-using System.Buffers;
 using System.IO;
 
 namespace FASTERCache;
@@ -8,7 +7,8 @@ internal class PayloadSerializer : BinaryObjectSerializer<Payload>
 {
     public override void Deserialize(out Payload obj)
     {
-        var expiry = reader.ReadInt64();
+        var absolute = reader.ReadInt64();
+        var sliding = reader.ReadInt32();
         var len = reader.ReadInt32();
         if (len == 0)
         {
@@ -23,12 +23,13 @@ internal class PayloadSerializer : BinaryObjectSerializer<Payload>
             len -= count;
         }
         if (len != 0) throw new EndOfStreamException();
-        obj = new(expiry, arr);
+        obj = new(absolute, sliding, arr);
     }
 
     public override void Serialize(ref Payload obj)
     {
         writer.Write(obj.ExpiryTicks);
+        writer.Write(obj.SlidingTicks);
         writer.Write(checked((int)obj.Value.Length));
         if (obj.Value.IsSingleSegment)
         {

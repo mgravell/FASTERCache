@@ -6,21 +6,27 @@ namespace FASTERCache;
 
 internal readonly struct Payload
 {
-    public Payload(long expiryTicks, byte[] value)
+    public Payload(long absoluteTicks, int slidingTicks, byte[] value)
     {
+        SlidingTicks = slidingTicks;
+        ExpiryTicks = absoluteTicks;
+        Value = new(value);
+    }
+    public Payload(long expiryTicks, int slidingTicks, ReadOnlySequence<byte> value)
+    {
+        SlidingTicks = slidingTicks;
         ExpiryTicks = expiryTicks;
-        Value = new(value);
-    }
-    public Payload(DateTime expiry, byte[] value)
-    {
-        ExpiryTicks = expiry.Ticks;
-        Value = new(value);
-    }
-    public Payload(DateTime expiry, ReadOnlySequence<byte> value)
-    {
-        ExpiryTicks = expiry.Ticks;
         Value = value;
     }
+
+    internal Payload(in Payload source, long expiryTicks)
+    {
+        SlidingTicks = source.SlidingTicks;
+        Value = source.Value;
+        ExpiryTicks = expiryTicks;
+    }
+
+    public readonly int SlidingTicks;
     public readonly long ExpiryTicks;
     public readonly DateTime ExpiryDateTime => new DateTime(ExpiryTicks);
     public readonly ReadOnlySequence<byte> Value;
@@ -39,5 +45,10 @@ internal readonly struct Payload
             }
         }
         return Value.ToArray();
+    }
+
+    internal Payload WithExpiry(long after)
+    {
+        throw new NotImplementedException();
     }
 }
