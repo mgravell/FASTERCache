@@ -1,10 +1,12 @@
 ﻿using FASTER.core;
 using Microsoft.Extensions.Internal;
 using System;
+using System.Buffers.Binary;
+using System.Text;
 
 namespace FASTERCache;
 
-internal abstract class CacheFunctions : SimpleFunctions<string, Payload, int>
+internal abstract class CacheFunctions : SimpleFunctions<SpanByte, SpanByte, int>
 {
     public static CacheFunctions Create(ISystemClock time) => new SystemClockFunctions(time);
 #if NET8_0_OR_GREATER
@@ -21,26 +23,28 @@ internal abstract class CacheFunctions : SimpleFunctions<string, Payload, int>
 
     public abstract long NowTicks { get; }
 
-    public override bool ConcurrentReader(ref string key, ref Payload input, ref Payload value, ref Payload dst, ref ReadInfo readInfo) // enforce expiry
-        => value.ExpiryTicks > NowTicks
+    internal static long GetExpiry(in SpanByte payload) => BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan());
+
+    public override bool ConcurrentReader(ref SpanByte key, ref SpanByte input, ref SpanByte value, ref SpanByte dst, ref ReadInfo readInfo) // enforce expiry
+        => GetExpiry(in value) > NowTicks
         && base.ConcurrentReader(ref key, ref input, ref value, ref dst, ref readInfo);
 
-    public override bool SingleReader(ref string key, ref Payload input, ref Payload value, ref Payload dst, ref ReadInfo readInfo) // enforce expiry
-        => value.ExpiryTicks > NowTicks
+    public override bool SingleReader(ref SpanByte key, ref SpanByte input, ref SpanByte value, ref SpanByte dst, ref ReadInfo readInfo) // enforce expiry
+        => GetExpiry(in value) > NowTicks
         && base.SingleReader(ref key, ref input, ref value, ref dst, ref readInfo);
 
-    public override bool ConcurrentWriter(ref string key, ref Payload input, ref Payload src, ref Payload dst, ref Payload output, ref UpsertInfo upsertInfo)
+    public override bool ConcurrentWriter(ref SpanByte key, ref SpanByte input, ref SpanByte src, ref SpanByte dst, ref SpanByte output, ref UpsertInfo upsertInfo)
     {
-        if (src.ExpiryTicks <= NowTicks) // reject expired
+        if (GetExpiry(in src) <= NowTicks) // reject expired
         {
             upsertInfo.Action = UpsertAction.CancelOperation;
             return false;
         }
         return base.ConcurrentWriter(ref key, ref input, ref src, ref dst, ref output, ref upsertInfo);
     }
-    public override bool SingleWriter(ref string key, ref Payload input, ref Payload src, ref Payload dst, ref Payload output, ref UpsertInfo upsertInfo, WriteReason reason)
+    public override bool SingleWriter(ref SpanByte key, ref SpanByte input, ref SpanByte src, ref SpanByte dst, ref SpanByte output, ref UpsertInfo upsertInfo, WriteReason reason)
     {
-        if (src.ExpiryTicks <= NowTicks) // reject expired
+        if (GetExpiry(in src) <= NowTicks) // reject expired
         {
             upsertInfo.Action = UpsertAction.CancelOperation;
             return false;
