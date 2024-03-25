@@ -140,29 +140,37 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         value.CopyTo(target.Slice(12));
     }
 
-    unsafe byte[]? IDistributedCache.Get(string key)
+    private unsafe byte[]? Get(string key, bool getPayload)
     {
         Span<byte> s = LeaseFor(key, out var buffer, out var length) ? new(buffer, 0, length) : stackalloc byte[length];
         WriteKey(key, s);
+        byte[]? finalResult = null;
         fixed (byte* ptr = s) // this might end up fixing the stack buffer; that's OK
         {
             var fixedKey = SpanByte.FromFixedSpan(s);
             using var session = _cache.For(_functions).NewSession<CacheFunctions>();
             var (status, payload) = session.Read(fixedKey);
+            Debug.WriteLine($"Read: {status}");
 
             if (status.IsCompletedSuccessfully && status.Found && !status.Expired)
             {
                 if (Slide(ref payload)) // apply sliding expiration
                 {
-                    session.Upsert(ref fixedKey, ref payload);
+                    var result = session.Upsert(ref fixedKey, ref payload);
+                    Debug.WriteLine($"Upsert (slide): {result}");
                 }
-                if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
-                return payload.ToByteArray();
+
+                if (getPayload)
+                {
+                    finalResult = payload.ToByteArray(); // yes, I know
+                }
             }
         }
         if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
-        return null;
+        return finalResult;
     }
+
+    byte[]? IDistributedCache.Get(string key) => Get(key, getPayload: true);
 
     async Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token)
     {
@@ -183,25 +191,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         //return null;
     }
 
-    unsafe void IDistributedCache.Refresh(string key)
-    {
-        Span<byte> s = LeaseFor(key, out var buffer, out var length) ? new(buffer, 0, length) : stackalloc byte[length];
-        WriteKey(key, s);
-        fixed (byte* ptr = s) // this might end up fixing the stack buffer; that's OK
-        {
-            var fixedKey = SpanByte.FromFixedSpan(s);
-            using var session = _cache.For(_functions).NewSession<CacheFunctions>();
-            var (status, payload) = session.Read(fixedKey);
-            if (status.IsCompletedSuccessfully && status.Found && !status.Expired)
-            {
-                if (Slide(ref payload)) // apply sliding expiration
-                {
-                    session.Upsert(ref fixedKey, ref payload);
-                }
-            }
-        }
-        if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
-    }
+    unsafe void IDistributedCache.Refresh(string key) => Get(key, getPayload: false);
 
     async Task IDistributedCache.RefreshAsync(string key, CancellationToken token)
     {
@@ -228,7 +218,8 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         {
             var fixedKey = SpanByte.FromFixedSpan(s);
             using var session = _cache.For(_functions).NewSession<CacheFunctions>();
-            session.Delete(ref fixedKey);
+            var result = session.Delete(ref fixedKey);
+            Debug.WriteLine($"Delete: {result}");
         }
         if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
     }
@@ -285,7 +276,8 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
             var fixedKey = SpanByte.FromFixedSpan(s);
             var fixedValue = SpanByte.FromFixedSpan(v);
             using var session = _cache.For(_functions).NewSession<CacheFunctions>();
-            session.Upsert(ref fixedKey, ref fixedValue);
+            var result = session.Upsert(ref fixedKey, ref fixedValue);
+            Debug.WriteLine($"Upsert: {result}");
         }
 
         if (keyBuffer is not null) ArrayPool<byte>.Shared.Return(keyBuffer);
