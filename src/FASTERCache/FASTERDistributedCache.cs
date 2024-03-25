@@ -15,15 +15,40 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
     private readonly FasterKV<string, Payload> _cache;
     private readonly CacheFunctions _functions;
+
     public FASTERDistributedCache(IOptions<FASTERCacheOptions> options, IServiceProvider services)
+        : this(options.Value, GetClock(services))
+    { }
+    static object? GetClock(IServiceProvider services)
     {
-        var config = options.Value;
-        var path = config.Directory;
 #if NET8_0_OR_GREATER
-        _functions = new CacheFunctions(services.GetService<TimeProvider>() ?? TimeProvider.System);
-#else
-        _functions = new CacheFunctions(services.GetService<ISystemClock>());
+        if (services.GetService<TimeProvider>() is { } time)
+        {
+            return time;
+        }
 #endif
+        return services.GetService<ISystemClock>();
+    }
+
+    internal FASTERDistributedCache(FASTERCacheOptions config, object? clock)
+    {
+        var path = config.Directory;
+
+        CacheFunctions? functions = null;
+#if NET8_0_OR_GREATER
+        if (clock is TimeProvider timeProvider)
+        {
+            functions = CacheFunctions.Create(timeProvider);
+        }
+#endif
+        if (functions is null && clock is ISystemClock systemClock)
+        {
+            functions = CacheFunctions.Create(systemClock);
+        }
+        functions ??= CacheFunctions.Create();
+        _functions = functions;
+
+
         if (!Directory.Exists(path))
         {
             Directory.CreateDirectory(path);
@@ -143,52 +168,9 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
     {
         using var session = _cache.For(_functions).NewSession<CacheFunctions>();
         await session.DeleteAsync(ref key, token: token);
+    
     }
-    private sealed class CacheFunctions : SimpleFunctions<string, Payload, int>
-    {
-#if NET8_0_OR_GREATER
-        private readonly TimeProvider _time;
-        public CacheFunctions(TimeProvider time) => _time = time;
-        public long NowTicks => _time.GetUtcNow().UtcTicks;
-#else
-        private readonly ISystemClock _time;
-        public CacheFunctions(ISystemClock? time) => _time = time ?? SharedClock.Instance;
-        public long NowTicks => _time.UtcNow.UtcTicks;
-        private static class SharedClock
-        {
-            public static SystemClock Instance = new();
-        }
-#endif
-
-
-
-        public override bool ConcurrentReader(ref string key, ref Payload input, ref Payload value, ref Payload dst, ref ReadInfo readInfo) // enforce expiry
-            => value.ExpiryTicks > NowTicks
-            && base.ConcurrentReader(ref key, ref input, ref value, ref dst, ref readInfo);
-
-        public override bool SingleReader(ref string key, ref Payload input, ref Payload value, ref Payload dst, ref ReadInfo readInfo) // enforce expiry
-            => value.ExpiryTicks > NowTicks
-            && base.SingleReader(ref key, ref input, ref value, ref dst, ref readInfo);
-
-        public override bool ConcurrentWriter(ref string key, ref Payload input, ref Payload src, ref Payload dst, ref Payload output, ref UpsertInfo upsertInfo)
-        {
-            if (src.ExpiryTicks <= NowTicks) // reject expired
-            {
-                upsertInfo.Action = UpsertAction.CancelOperation;
-                return false;
-            }
-            return base.ConcurrentWriter(ref key, ref input, ref src, ref dst, ref output, ref upsertInfo);
-        }
-        public override bool SingleWriter(ref string key, ref Payload input, ref Payload src, ref Payload dst, ref Payload output, ref UpsertInfo upsertInfo, WriteReason reason)
-        {
-            if (src.ExpiryTicks <= NowTicks) // reject expired
-            {
-                upsertInfo.Action = UpsertAction.CancelOperation;
-                return false;
-            }
-            return base.SingleWriter(ref key, ref input, ref src, ref dst, ref output, ref upsertInfo, reason);
-        }
-    }
+    
     private long NowTicks => _functions.NowTicks;
 
     private long GetExpiryTicks(DistributedCacheEntryOptions options, out int sliding)

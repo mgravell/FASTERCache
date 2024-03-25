@@ -25,4 +25,17 @@ public class ConfigTests
         }
         Assert.True(typed.IsDisposed);
     }
+
+    [Fact]
+    public void CanCreateWithBuilder()
+    {
+        var cache = new FASTERCacheBuilder("dummy").Create();
+        FASTERDistributedCache typed;
+        using (cache as IDisposable)
+        {
+            typed = Assert.IsType<FASTERDistributedCache>(cache);
+            Assert.False(typed.IsDisposed);
+        }
+        Assert.True(typed.IsDisposed);
+    }
 }
