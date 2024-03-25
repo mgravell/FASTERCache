@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -33,6 +34,24 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         }
 #endif
         return services.GetService<ISystemClock>();
+    }
+
+    private readonly ConcurrentBag<ClientSession<ReadOnlyMemory<byte>, Memory<byte>, Memory<byte>, (IMemoryOwner<byte>, int), int, FASTERCacheFunctions>> _clientSessions = new();
+
+    private ClientSession<ReadOnlyMemory<byte>, Memory<byte>, Memory<byte>, (IMemoryOwner<byte>, int), int, FASTERCacheFunctions> GetSession()
+        => _clientSessions.TryTake(out var session) ? session : _cache.For(_functions).NewSession<FASTERCacheFunctions>();
+
+    private void PutSession(ClientSession<ReadOnlyMemory<byte>, Memory<byte>, Memory<byte>, (IMemoryOwner<byte>, int), int, FASTERCacheFunctions> session)
+    {
+        const int MAX_APPROX_SESSIONS = 20;
+        if (_clientSessions.Count <= MAX_APPROX_SESSIONS) // note race, that's fine
+        {
+            _clientSessions.Add(session);
+        }
+        else
+        {
+            session.Dispose();
+        }
     }
 
     internal FASTERDistributedCache(FASTERCacheOptions config, object? clock, object? logger)
@@ -123,7 +142,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         var keyMemory = LeaseFor(key, out var keyLease);
 
         byte[]? finalResult = null;
-        using var session = _cache.For(_functions).NewSession<FASTERCacheFunctions>();
+        var session = GetSession();
         var result = await session.ReadAsync(keyMemory, token: token);
         var status = result.Status;
         Debug.WriteLine($"Read: {status}");
@@ -145,6 +164,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
             }
         }
         ArrayPool<byte>.Shared.Return(keyLease);
+        PutSession(session);
         return finalResult;
     }
     private byte[]? Get(string key, bool getPayload)
@@ -152,7 +172,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         var keyMemory = LeaseFor(key, out var keyLease);
 
         byte[]? finalResult = null;
-        using var session = _cache.For(_functions).NewSession<FASTERCacheFunctions>();
+        var session = GetSession();
         var (status, payload) = session.Read(keyMemory);
         Debug.WriteLine($"Read: {status}");
 
@@ -172,6 +192,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
             }
         }
         ArrayPool<byte>.Shared.Return(keyLease);
+        PutSession(session);
         return finalResult;
     }
 
@@ -187,20 +208,22 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
     {
         var keyMemory = LeaseFor(key, out var keyLease);
 
-        using var session = _cache.For(_functions).NewSession<FASTERCacheFunctions>();
+        var session = GetSession();
         var result = session.Delete(ref keyMemory);
         Debug.WriteLine($"Delete: {result}");
         ArrayPool<byte>.Shared.Return(keyLease);
+        PutSession(session);
     }
 
     async Task IDistributedCache.RemoveAsync(string key, CancellationToken token)
     {
         var keyMemory = LeaseFor(key, out var keyLease);
 
-        using var session = _cache.For(_functions).NewSession<FASTERCacheFunctions>();
+        var session = GetSession();
         var result = await session.DeleteAsync(ref keyMemory, token: token);
         Debug.WriteLine($"Delete: {result.Status}");
         ArrayPool<byte>.Shared.Return(keyLease);
+        PutSession(session);
     }
 
     private long NowTicks => _functions.NowTicks;
@@ -235,9 +258,9 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
     void IDistributedCache.Set(string key, byte[] value, DistributedCacheEntryOptions options)
     {
         var keyMemory = LeaseFor(key, out var keyLease);
-        var valueMemory = LeaseFor(value, out var valueLease, GetExpiryTicks(options, out var sliding), sliding); 
+        var valueMemory = LeaseFor(value, out var valueLease, GetExpiryTicks(options, out var sliding), sliding);
 
-        using var session = _cache.For(_functions).NewSession<FASTERCacheFunctions>();
+        var session = GetSession();
 
         Debug.WriteLine("Write: " + BitConverter.ToString(valueMemory.Span.Slice(12).ToArray()));
         var result = session.Upsert(ref keyMemory, ref valueMemory);
@@ -245,6 +268,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
         ArrayPool<byte>.Shared.Return(keyLease);
         ArrayPool<byte>.Shared.Return(valueLease);
+        PutSession(session);
     }
 
     async Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
@@ -252,7 +276,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         var keyMemory = LeaseFor(key, out var keyLease);
         var valueMemory = LeaseFor(value, out var valueLease, GetExpiryTicks(options, out var sliding), sliding);
 
-        using var session = _cache.For(_functions).NewSession<FASTERCacheFunctions>();
+        var session = GetSession();
 
         Debug.WriteLine("Write: " + BitConverter.ToString(valueMemory.Span.Slice(12).ToArray()));
         var result = await session.UpsertAsync(ref keyMemory, ref valueMemory, token: token);
@@ -260,5 +284,6 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
         ArrayPool<byte>.Shared.Return(keyLease);
         ArrayPool<byte>.Shared.Return(valueLease);
+        PutSession(session);
     }
 }
