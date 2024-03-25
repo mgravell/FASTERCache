@@ -31,8 +31,8 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
         var logSettings = config.LogSettings;
         // create decives if not already specified
-        logSettings.LogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.log"));
-        logSettings.ObjectLogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.obj.log"));
+        logSettings.LogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.log"), capacity: config.LogCapacity, deleteOnClose: config.DeleteOnClose);
+        logSettings.ObjectLogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.obj.log"), capacity: config.ObjectLogCapacity, deleteOnClose: config.DeleteOnClose);
 
         // Define serializers; otherwise FASTER will use the slower DataContract
         // Needed only for class keys/values

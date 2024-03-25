@@ -9,6 +9,10 @@ public sealed class FASTERCacheOptions
 
     public LogSettings LogSettings { get; } = new();
 
+    public bool DeleteOnClose { get; set; } = false;
+    public long LogCapacity { get; set; } = -1;
+    public long ObjectLogCapacity { get; set; } = -1;
+
     internal class Validator : IValidateOptions<FASTERCacheOptions>
     {
         ValidateOptionsResult IValidateOptions<FASTERCacheOptions>.Validate(string? name, FASTERCacheOptions options)
