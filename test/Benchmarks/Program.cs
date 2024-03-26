@@ -8,6 +8,8 @@ obj.FASTER_Set();
 await obj.FASTER_SetAsync();
 Console.WriteLine(obj.FASTER_Get());
 Console.WriteLine(await obj.FASTER_GetAsync());
+await obj.FASTER_SetAsyncBuffer();
+Console.WriteLine(await obj.FASTER_GetAsyncBuffer());
 obj.SQLite_Set();
 await obj.SQLite_SetAsync();
 Console.WriteLine(obj.SQLite_Get());

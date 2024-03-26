@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Internal;
 using System;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -10,6 +11,7 @@ namespace FASTERCache;
 public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixture<FunctionalTests.CacheInstance>
 {
     private IDistributedCache Cache => fixture.Cache;
+    private IExperimentalBufferCache BufferCache => fixture.BufferCache;
 
     public sealed class CacheInstance : IDisposable
     {
@@ -20,6 +22,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         public void SetTime(DateTimeOffset value) => time.Set(value);
         public void AddTime(TimeSpan value) => time.Add(value);
         public IDistributedCache Cache => cache;
+        internal IExperimentalBufferCache BufferCache => (IExperimentalBufferCache)cache;
         public CacheInstance()
         {
             var services = new ServiceCollection();
@@ -79,7 +82,11 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
     public async Task BasicUsageAsync()
     {
         var key = Caller();
+        var bw = new ArrayBufferWriter<byte>();
         Assert.Null(await Cache.GetAsync(key));
+        Assert.False(await BufferCache.GetAsync(key, bw));
+        Assert.Equal(0, bw.WrittenCount);
+
         var original = Guid.NewGuid().ToByteArray();
         await Cache.SetAsync(key, original);
 
@@ -91,6 +98,9 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         retrieved = await Cache.GetAsync(key);
         Assert.NotNull(retrieved);
         Assert.Equal(original, retrieved);
+
+        Assert.True(await BufferCache.GetAsync(key, bw));
+        Assert.Equal(original, bw.WrittenSpan.ToArray());
 
         await Cache.RemoveAsync(key);
         Assert.Null(await Cache.GetAsync(key));
