@@ -243,6 +243,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
                 FASTERCacheOutput output = default;
                 var status = session.Read(ref fixedKey, ref input, ref output);
                 Debug.WriteLine($"Read: {status}");
+                finalResult = output.Payload;
 
                 if (Slide(in output, ref input))
                 {
