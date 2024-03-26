@@ -8,6 +8,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -40,12 +41,12 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         return services.GetService<ISystemClock>();
     }
 
-    private readonly ConcurrentBag<ClientSession<SpanByte, SpanByte, FASTERCacheInput, byte[]?, Empty, FASTERCacheFunctions>> _clientSessions = new();
+    private readonly ConcurrentBag<ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions>> _clientSessions = new();
 
-    private ClientSession<SpanByte, SpanByte, FASTERCacheInput, byte[]?, Empty, FASTERCacheFunctions> GetSession()
+    private ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions> GetSession()
         => _clientSessions.TryTake(out var session) ? session : _cache.For(_functions).NewSession<FASTERCacheFunctions>();
 
-    private void ReuseSession(ClientSession<SpanByte, SpanByte, FASTERCacheInput, byte[]?, Empty, FASTERCacheFunctions> session)
+    private void ReuseSession(ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions> session)
     {
         const int MAX_APPROX_SESSIONS = 20;
         if (_clientSessions.Count <= MAX_APPROX_SESSIONS) // note race, that's fine
@@ -57,7 +58,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
             session.Dispose();
         }
     }
-    private static void FaultSession(ClientSession<SpanByte, SpanByte, FASTERCacheInput, byte[]?, Empty, FASTERCacheFunctions> session)
+    private static void FaultSession(ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions> session)
     {
         if (session is not null)
         {
@@ -114,12 +115,12 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         _cache.Dispose();
     }
 
-    private bool Slide(ref FASTERCacheInput input)
+    private bool Slide(in FASTERCacheOutput output, ref FASTERCacheInput input)
     {
-        if (input.SlidingExpiration > 0)
+        if (output.SlidingExpiration > 0)
         {
-            var newAbsolute = NowTicks + input.SlidingExpiration;
-            if (newAbsolute > input.AbsoluteExpiration)
+            var newAbsolute = NowTicks + output.SlidingExpiration;
+            if (newAbsolute > output.AbsoluteExpiration)
             {
                 input = input.Slide(newAbsolute);
                 return true;
@@ -152,6 +153,15 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         return target;
     }
 
+    static Memory<byte> WriteKey(string key, out byte[] lease)
+    {
+        var length = Encoding.GetByteCount(key);
+        lease = ArrayPool<byte>.Shared.Rent(length);
+        var actualLength = Encoding.GetBytes(key, 0, key.Length, lease, 0);
+        Debug.Assert(length == actualLength);
+        return new(lease, 0, length);
+    }
+
     ReadOnlySpan<byte> WriteValue(Span<byte> target, byte[] value, out byte[] lease, DistributedCacheEntryOptions? options)
     {
         var absoluteExpiration = GetExpiryTicks(options, out var slidingExpiration);
@@ -162,37 +172,58 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         return target;
     }
 
+    Memory<byte> WriteValue(byte[] value, out byte[] lease, DistributedCacheEntryOptions? options)
+    {
+        var absoluteExpiration = GetExpiryTicks(options, out var slidingExpiration);
+        var length = value.Length + 12;
+        lease = ArrayPool<byte>.Shared.Rent(length);
+        BinaryPrimitives.WriteInt64LittleEndian(new(lease, 0, 8), absoluteExpiration);
+        BinaryPrimitives.WriteInt32LittleEndian(new(lease, 8, 4), slidingExpiration);
+        value.CopyTo(lease, 12);
+        return new(lease, 0, length);
+    }
+
     private async Task<byte[]?> GetAsync(string key, bool getPayload, CancellationToken token)
     {
-        await Task.Yield();
-        throw new NotImplementedException();
-        //var keyMemory = LeaseFor(key, out var keyLease);
+        var keyMemory = WriteKey(key, out var lease);
 
-        //byte[]? finalResult = null;
-        //var session = GetSession();
-        //var result = await session.ReadAsync(keyMemory, token: token);
-        //var status = result.Status;
-        //Debug.WriteLine($"Read: {status}");
+        byte[]? finalResult = null;
+        var session = GetSession();
+        try
+        {
 
-        //if (status.IsCompletedSuccessfully && status.Found && !status.Expired)
-        //{
-        //    var payload = result.Output;
-        //    var memory = payload.Item1.Memory.Slice(0, payload.Item2);
-        //    if (Slide(memory.Span)) // apply sliding expiration
-        //    {
-        //        var upsertResult = await session.UpsertAsync(ref keyMemory, ref memory, token: token);
-        //        Debug.WriteLine($"Upsert (slide): {upsertResult.Status}");
-        //    }
+            using (keyMemory.Pin())
+            {
+                var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
 
-        //    if (getPayload)
-        //    {
-        //        finalResult = memory.Span.Slice(12).ToArray(); // yes, I know
-        //        Debug.WriteLine("Read payload: " + BitConverter.ToString(finalResult));
-        //    }
-        //}
-        //ArrayPool<byte>.Shared.Return(keyLease);
-        //PutSession(session);
-        //return finalResult;
+                var input = new FASTERCacheInput(getPayload ? OperationFlags.ReadArray : OperationFlags.None);
+
+                var tuple = await session.ReadAsync(fixedKey, input, token: token);
+                tuple.Complete();
+                finalResult = tuple.Output.Payload;
+                Debug.WriteLine($"Read: {tuple.Status}");
+
+                if (Slide(tuple.Output, ref input))
+                {
+                    var upsert = await session.BasicContext.UpsertAsync(fixedKey, input, default, token: token);
+                    upsert.Complete();
+                    Debug.WriteLine($"Upsert (slide): {upsert.Status}");
+                }
+                if (finalResult is not null)
+                {
+                    Debug.WriteLine("Read payload: " + BitConverter.ToString(finalResult));
+                }
+                // await session.CompletePendingAsync(true, token: token);
+            }
+            ReturnLease(lease);
+            ReuseSession(session);
+            return finalResult;
+        }
+        catch
+        {
+            FaultSession(session);
+            throw;
+        }
     }
     const int MAX_STACKALLOC = 128;
     private unsafe byte[]? Get(string key, bool getPayload)
@@ -206,17 +237,18 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
             fixed (byte* keyPtr = keySpan)
             {
-                var fixedKey = SpanByte.FromPointer(keyPtr, keySpan.Length);
+                var fixedKey = SpanByte.FromFixedSpan(keySpan);
 
                 var input = new FASTERCacheInput(getPayload ? OperationFlags.ReadArray : OperationFlags.None);
-    
-                var status = session.Read(ref fixedKey, ref input, ref finalResult);
+                FASTERCacheOutput output = default;
+                var status = session.Read(ref fixedKey, ref input, ref output);
                 Debug.WriteLine($"Read: {status}");
 
-                if (Slide(ref input))
+                if (Slide(in output, ref input))
                 {
                     SpanByte payload = default;
-                    session.BasicContext.Upsert(ref fixedKey, ref input, ref payload, ref finalResult);
+                    var upsert = session.BasicContext.Upsert(ref fixedKey, ref input, ref payload, ref output);
+                    Debug.WriteLine($"Upsert (slide): {upsert}");
                 }
                 if (finalResult is not null)
                 {
@@ -254,7 +286,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         {
             fixed (byte* ptr = keySpan)
             {
-                var fixedKey = SpanByte.FromPointer(ptr, keySpan.Length);
+                var fixedKey = SpanByte.FromFixedSpan(keySpan);
                 var result = session.Delete(ref fixedKey);
                 Debug.WriteLine($"Delete: {result}");
                 session.CompletePending(true);
@@ -271,15 +303,27 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
     async Task IDistributedCache.RemoveAsync(string key, CancellationToken token)
     {
-        await Task.Yield();
-        throw new NotImplementedException();
-        //var keyMemory = LeaseFor(key, out var keyLease);
+        var keyMemory = WriteKey(key, out var lease);
 
-        //var session = GetSession();
-        //var result = await session.DeleteAsync(ref keyMemory, token: token);
-        //Debug.WriteLine($"Delete: {result.Status}");
-        //ArrayPool<byte>.Shared.Return(keyLease);
-        //PutSession(session);
+        var session = GetSession();
+        try
+        {
+            using (keyMemory.Pin())
+            {
+                var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
+                var result = await session.DeleteAsync(ref fixedKey, token: token);
+                result.Complete();
+                Debug.WriteLine($"Delete: {result.Status}");
+                // await session.CompletePendingAsync(true, token: token);
+            }
+            ReturnLease(lease);
+            ReuseSession(session);
+        }
+        catch
+        {
+            FaultSession(session);
+            throw;
+        }
 
     }
 
@@ -325,8 +369,8 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
             fixed (byte* keyPtr = keySpan)
             fixed (byte* valuePtr = valueSpan)
             {
-                var fixedKey = SpanByte.FromPointer(keyPtr, keySpan.Length);
-                var fixedValue = SpanByte.FromPointer(valuePtr, valueSpan.Length);
+                var fixedKey = SpanByte.FromFixedSpan(keySpan);
+                var fixedValue = SpanByte.FromFixedSpan(valueSpan);
                 var result = session.Upsert(ref fixedKey, ref fixedValue);
                 Debug.WriteLine($"Upsert: {result}");
                 session.CompletePending(true);
@@ -344,19 +388,31 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
     async Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
     {
-        await Task.Yield();
-        throw new NotImplementedException();
-        //var keyMemory = LeaseFor(key, out var keyLease);
-        //var valueMemory = LeaseFor(value, out var valueLease, GetExpiryTicks(options, out var sliding), sliding);
+        var keyMemory = WriteKey(key, out var keyLease);
+        var valueMemory = WriteValue(value, out var valueLease, options);
 
-        // var session = GetSession();
-
-        //Debug.WriteLine("Write: " + BitConverter.ToString(valueMemory.Span.Slice(12).ToArray()));
-        //var result = await session.UpsertAsync(ref keyMemory, ref valueMemory, token: token);
-        //Debug.WriteLine($"Upsert: {result.Status}");
-
-        //ArrayPool<byte>.Shared.Return(keyLease);
-        //ArrayPool<byte>.Shared.Return(valueLease);
-        //PutSession(session);
+        var session = GetSession();
+        try
+        {
+            Debug.WriteLine("Write: " + BitConverter.ToString(valueMemory.Slice(12).ToArray()));
+            using (keyMemory.Pin()) // TODO: better pinning
+            using (valueMemory.Pin())
+            {
+                var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
+                var fixedValue = SpanByte.FromPinnedMemory(valueMemory);
+                var result = await session.UpsertAsync(ref fixedKey, ref fixedValue, token: token);
+                result.Complete();
+                Debug.WriteLine($"Upsert: {result.Status}");
+                //await session.CompletePendingAsync(true, token: token);
+            }
+            ReturnLease(keyLease);
+            ReturnLease(valueLease);
+            ReuseSession(session);
+        }
+        catch
+        {
+            FaultSession(session);
+            throw;
+        }
     }
 }
