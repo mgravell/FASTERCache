@@ -8,12 +8,13 @@ using NeoSmart.Caching.Sqlite;
 using NeoSmart.Caching.Sqlite.AspNetCore;
 using System;
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Threading.Tasks;
 
 namespace FASTERCache;
 
-[SimpleJob, MemoryDiagnoser]
+[SimpleJob, MemoryDiagnoser, MaxIterationCount(15), MinIterationCount(1)]
 public class CacheBenchmarks : IDisposable
 {
     private readonly IDistributedCache _faster, _sqlite;
@@ -75,8 +76,8 @@ public class CacheBenchmarks : IDisposable
 #endif
     }
 
-    private int? Get(IDistributedCache cache) => cache.Get(key)?.Length;
-    private async ValueTask<int?> GetAsync(IDistributedCache cache) => (await cache.GetAsync(key))?.Length;
+    private int Get(IDistributedCache cache) => Assert(cache.Get(key));
+    private async ValueTask<int> GetAsync(IDistributedCache cache) => Assert(await cache.GetAsync(key));
 
     class CountingBufferWriter : IBufferWriter<byte>, IDisposable
     {
@@ -93,11 +94,26 @@ public class CacheBenchmarks : IDisposable
 
         public Span<byte> GetSpan(int sizeHint = 0) => _buffer;
     }
-    private async ValueTask<int?> GetAsync(IExperimentalBufferCache cache)
+    private async ValueTask<int> GetAsync(IExperimentalBufferCache cache)
     {
         using var bw = new CountingBufferWriter();
-        await cache.GetAsync(key, bw);
-        return bw.Count;
+        return Assert(await cache.GetAsync(key, bw) ? bw.Count : -1);
+    }
+
+    private int Assert(int length)
+    {
+        if (length != PayloadLength) Throw();
+        return length;
+        static void Throw() => throw new InvalidOperationException("incorrect payload");
+    }
+    private int Assert(byte[]? payload)
+    {
+        if (payload is null) Throw();
+        if (payload.Length != PayloadLength) Throw();
+        return payload.Length;
+
+        [DoesNotReturn]
+        static void Throw() => throw new InvalidOperationException("incorrect payload");
     }
 
     private void Set(IDistributedCache cache)
@@ -130,9 +146,9 @@ public class CacheBenchmarks : IDisposable
     public void FASTER_Set() => Set(_faster);
 
     [Benchmark]
-    public ValueTask<int?> FASTER_GetAsync() => GetAsync(_faster);
+    public ValueTask<int> FASTER_GetAsync() => GetAsync(_faster);
     [Benchmark]
-    public ValueTask<int?> FASTER_GetAsyncBuffer() => GetAsync(_fasterBuffer);
+    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsync(_fasterBuffer);
 
     [Benchmark]
     public Task FASTER_SetAsync() => SetAsync(_faster);
@@ -146,7 +162,7 @@ public class CacheBenchmarks : IDisposable
     public void SQLite_Set() => Set(_sqlite);
 
     [Benchmark]
-    public ValueTask<int?> SQLite_GetAsync() => GetAsync(_sqlite);
+    public ValueTask<int> SQLite_GetAsync() => GetAsync(_sqlite);
 
     [Benchmark]
     public Task SQLite_SetAsync() => SetAsync(_sqlite);
@@ -159,7 +175,7 @@ public class CacheBenchmarks : IDisposable
     public void Rocks_Set() => Set(_rocks);
 
     [Benchmark]
-    public ValueTask<int?> Rocks_GetAsync() => GetAsync(_rocks);
+    public ValueTask<int> Rocks_GetAsync() => GetAsync(_rocks);
 
     [Benchmark]
     public Task Rocks_SetAsync() => SetAsync(_rocks);
