@@ -53,7 +53,7 @@ public class CacheBenchmarks : IDisposable
     public CacheBenchmarks()
     {
         var services = new ServiceCollection();
-        services.AddFASTERCache(options => options.Directory = "faster");
+        services.AddFASTERDistributedCache(options => options.Directory = "faster");
         _faster = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
         _fasterBuffer = (IExperimentalBufferCache)_faster;
 

@@ -3,6 +3,12 @@ using Microsoft.Extensions.Options;
 using System.IO;
 
 namespace FASTERCache;
+
+/// <summary>
+/// Allows configuration of FASTER cache stores; these settings can be shared between
+/// multiple cache implementations - for example "Output Cache" and "Distributed Cache"
+/// might share a FASTER instance.
+/// </summary>
 public sealed class FASTERCacheOptions
 {
     public string Directory { get; set; } = "";

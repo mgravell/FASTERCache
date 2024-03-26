@@ -31,7 +31,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
 #else
             services.AddSingleton<ISystemClock>(time);
 #endif
-            services.AddFASTERCache(options => options.Directory = "cachedir");
+            services.AddFASTERDistributedCache(options => options.Directory = "cachedir");
             provider = services.BuildServiceProvider();
             cache = provider.GetRequiredService<IDistributedCache>();
         }

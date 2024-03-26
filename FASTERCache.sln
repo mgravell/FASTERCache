@@ -28,6 +28,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "docs", "docs\docs.csproj", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Benchmarks", "test\Benchmarks\Benchmarks.csproj", "{2AC02BF7-AEF3-4C7E-BB3C-87027FA01176}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FASTERCache.AspNetCore", "src\FASTERCache.AspNetCore\FASTERCache.AspNetCore.csproj", "{FB7716DD-2C86-4BFF-A446-C39EA9017CC2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -50,6 +52,10 @@ Global
 		{2AC02BF7-AEF3-4C7E-BB3C-87027FA01176}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2AC02BF7-AEF3-4C7E-BB3C-87027FA01176}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2AC02BF7-AEF3-4C7E-BB3C-87027FA01176}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FB7716DD-2C86-4BFF-A446-C39EA9017CC2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FB7716DD-2C86-4BFF-A446-C39EA9017CC2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FB7716DD-2C86-4BFF-A446-C39EA9017CC2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FB7716DD-2C86-4BFF-A446-C39EA9017CC2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -59,6 +65,7 @@ Global
 		{2388A41A-2889-4DE1-B1EB-BFF139E2388C} = {D96F0A15-37E6-45EF-BFE5-0AEF7C612C0D}
 		{4729AF1C-AA25-4F09-BB96-1EF0EA49CE12} = {6C68022E-9084-4E97-80DB-4AC05C71B7B0}
 		{2AC02BF7-AEF3-4C7E-BB3C-87027FA01176} = {D96F0A15-37E6-45EF-BFE5-0AEF7C612C0D}
+		{FB7716DD-2C86-4BFF-A446-C39EA9017CC2} = {E667B8C7-4FB3-480A-825E-35E534B3D157}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {9AE46496-6510-4618-A4BD-C1EA7CE672C2}

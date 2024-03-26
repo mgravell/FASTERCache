@@ -11,16 +11,16 @@ public class ConfigTests
     {
         var services = new ServiceCollection();
         bool configured = false;
-        services.AddFASTERCache(options =>
+        services.AddFASTERDistributedCache(options =>
         {
             options.Directory = "cachedir";
             configured = true;
         });
-        FASTERDistributedCache typed;
+        DistributedCache typed;
         using (var provider = services.BuildServiceProvider())
         {
             var cache = provider.GetRequiredService<IDistributedCache>();
-            typed = Assert.IsType<FASTERDistributedCache>(cache);
+            typed = Assert.IsType<DistributedCache>(cache);
             Assert.True(configured);
         }
         Assert.True(typed.IsDisposed);
@@ -29,11 +29,11 @@ public class ConfigTests
     [Fact]
     public void CanCreateWithBuilder()
     {
-        var cache = new FASTERCacheBuilder("dummy").Create();
-        FASTERDistributedCache typed;
+        var cache = new FASTERCacheBuilder("dummy").CreateDistributedCache();
+        DistributedCache typed;
         using (cache as IDisposable)
         {
-            typed = Assert.IsType<FASTERDistributedCache>(cache);
+            typed = Assert.IsType<DistributedCache>(cache);
             Assert.False(typed.IsDisposed);
         }
         Assert.True(typed.IsDisposed);

@@ -2,34 +2,29 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Internal;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using static FASTERCache.FASTERCacheInput;
 
 namespace FASTERCache;
 
-
-
-internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, IExperimentalBufferCache
+/// <summary>
+/// Implements IDistributedCache
+/// </summary>
+internal sealed partial class DistributedCache : CacheBase<DistributedCache.Input, DistributedCache.Output, Empty, DistributedCache.CacheFunctions>,  IDistributedCache, IDisposable, IExperimentalBufferCache
 {
+    protected override byte KeyPrefix => (byte)'D';
+
     // heavily influenced by https://github.com/microsoft/FASTER/blob/main/cs/samples/CacheStore/
 
-    private readonly FasterKV<SpanByte, SpanByte> _cache;
-    private readonly FASTERCacheFunctions _functions;
-
-    public FASTERDistributedCache(IOptions<FASTERCacheOptions> options, IServiceProvider services)
-        : this(options.Value, GetClock(services), services.GetService<ILogger<FASTERDistributedCache>>())
+    public DistributedCache(CacheService cacheService, IServiceProvider services)
+        : this(cacheService, GetClock(services))
     { }
+
     static object? GetClock(IServiceProvider services)
     {
 #if NET8_0_OR_GREATER
@@ -41,81 +36,18 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
         return services.GetService<ISystemClock>();
     }
 
-    private readonly ConcurrentBag<ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions>> _clientSessions = new();
-
-    private ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions> GetSession()
-        => _clientSessions.TryTake(out var session) ? session : _cache.For(_functions).NewSession<FASTERCacheFunctions>();
-
-    private void ReuseSession(ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions> session)
+    internal DistributedCache(CacheService cacheService, object? clock) : base(cacheService, clock switch
     {
-        const int MAX_APPROX_SESSIONS = 20;
-        if (_clientSessions.Count <= MAX_APPROX_SESSIONS) // note race, that's fine
-        {
-            _clientSessions.Add(session);
-        }
-        else
-        {
-            session.Dispose();
-        }
-    }
-    private static void FaultSession(ClientSession<SpanByte, SpanByte, FASTERCacheInput, FASTERCacheOutput, Empty, FASTERCacheFunctions> session)
-    {
-        if (session is not null)
-        {
-            // we already know things are unhappy; be cautious
-            try { session.Dispose(); }
-            catch { }
-        }
-    }
-
-    internal FASTERDistributedCache(FASTERCacheOptions config, object? clock, object? logger)
-    {
-        var path = config.Directory;
-
-        FASTERCacheFunctions? functions = null;
 #if NET8_0_OR_GREATER
-        if (clock is TimeProvider timeProvider)
-        {
-            functions = FASTERCacheFunctions.Create(timeProvider);
-        }
+        TimeProvider timeProvider => CacheFunctions.Create(timeProvider),
 #endif
-        if (functions is null && clock is ISystemClock systemClock)
-        {
-            functions = FASTERCacheFunctions.Create(systemClock);
-        }
-        functions ??= FASTERCacheFunctions.Create();
-        _functions = functions;
+        ISystemClock systemClock => CacheFunctions.Create(systemClock),
+        _ => CacheFunctions.Create()
+    })
+    { }
 
 
-        if (!Directory.Exists(path))
-        {
-            Directory.CreateDirectory(path);
-        }
-
-        var logSettings = config.LogSettings;
-        // create decives if not already specified
-        logSettings.LogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.log"), capacity: config.LogCapacity, deleteOnClose: config.DeleteOnClose);
-        logSettings.ObjectLogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.obj.log"), capacity: config.ObjectLogCapacity, deleteOnClose: config.DeleteOnClose);
-
-        // Create instance of store
-        _cache = new(
-            size: 1L << 20,
-            logSettings: logSettings,
-            checkpointSettings: new CheckpointSettings { CheckpointDir = path },
-            loggerFactory: logger as ILoggerFactory,
-            logger: logger as ILogger
-            );
-    }
-
-    internal bool IsDisposed { get; private set; }
-
-    void IDisposable.Dispose()
-    {
-        IsDisposed = true;
-        _cache.Dispose();
-    }
-
-    private bool Slide(in FASTERCacheOutput output, ref FASTERCacheInput input)
+    private bool Slide(in Output output, ref Input input)
     {
         if (output.SlidingExpiration > 0)
         {
@@ -129,37 +61,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
         return false;
     }
 
-    private static UTF8Encoding Encoding = new(false);
     const int MAX_STACKALLOC_SIZE = 128;
-
-    private static byte[] EnsureSize(ref Span<byte> target, int length)
-    {
-        if (length > target.Length)
-        {
-            var arr = ArrayPool<byte>.Shared.Rent(length); ;
-            target = new(arr, 0, length);
-            return arr;
-        }
-        target = target.Slice(0, length);
-        return [];
-    }
-    static ReadOnlySpan<byte> WriteKey(Span<byte> target, string key, out byte[] lease)
-    {
-        var length = Encoding.GetByteCount(key);
-        lease = EnsureSize(ref target, length);
-        var actualLength = Encoding.GetBytes(key, target);
-        Debug.Assert(length == actualLength);
-        return target;
-    }
-
-    static Memory<byte> WriteKey(string key, out byte[] lease)
-    {
-        var length = Encoding.GetByteCount(key);
-        lease = ArrayPool<byte>.Shared.Rent(length);
-        var actualLength = Encoding.GetBytes(key, 0, key.Length, lease, 0);
-        Debug.Assert(length == actualLength);
-        return new(lease, 0, length);
-    }
 
     ReadOnlySpan<byte> WriteValue(Span<byte> target, byte[] value, out byte[] lease, DistributedCacheEntryOptions? options)
     {
@@ -182,7 +84,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
         return new(lease, 0, length);
     }
 
-    private async Task<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, CancellationToken token, Func<FASTERCacheOutput, TResult> selector)
+    private async Task<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, CancellationToken token, Func<Output, TResult> selector)
     {
         var keyMemory = WriteKey(key, out var lease);
 
@@ -194,7 +96,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
             {
                 var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
 
-                var input = new FASTERCacheInput(readArray ? OperationFlags.ReadArray : OperationFlags.None, bufferWriter);
+                var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
 
                 var readResult = await session.ReadAsync(fixedKey, input, token: token);
                 var status = readResult.Status;
@@ -232,6 +134,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
             throw;
         }
     }
+
     const int MAX_STACKALLOC = 128;
     private unsafe byte[]? Get(string key, bool getPayload)
     {
@@ -246,8 +149,8 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
 
-                var input = new FASTERCacheInput(getPayload ? OperationFlags.ReadArray : OperationFlags.None);
-                FASTERCacheOutput output = default;
+                var input = new Input(getPayload ? Input.OperationFlags.ReadArray : Input.OperationFlags.None);
+                Output output = default;
                 var status = session.Read(ref fixedKey, ref input, ref output);
                 Debug.WriteLine($"Read: {status}");
                 finalResult = output.Payload;
@@ -274,8 +177,6 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
             throw;
         }
     }
-
-    private static void ReturnLease(byte[] lease) => ArrayPool<byte>.Shared.Return(lease);
 
     byte[]? IDistributedCache.Get(string key) => Get(key, getPayload: true);
 
@@ -335,7 +236,7 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, I
 
     }
 
-    private long NowTicks => _functions.NowTicks;
+    private long NowTicks => base.Functions.NowTicks;
 
     private long GetExpiryTicks(DistributedCacheEntryOptions? options, out int sliding)
     {

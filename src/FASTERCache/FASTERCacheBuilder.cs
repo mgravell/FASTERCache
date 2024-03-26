@@ -2,8 +2,6 @@
 using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using System;
-using System.IO;
-using static System.Collections.Specialized.BitVector32;
 
 namespace FASTERCache;
 
@@ -18,6 +16,7 @@ public sealed class FASTERCacheBuilder
         if (string.IsNullOrWhiteSpace(directory)) throw new ArgumentOutOfRangeException(nameof(directory));
         _options = new FASTERCacheOptions { Directory = directory };
     }
+    private CacheService? _service;
     private readonly FASTERCacheOptions _options;
     private object? _clock, _logger;
     internal FASTERCacheOptions Options => _options;
@@ -50,6 +49,6 @@ public sealed class FASTERCacheBuilder
         return this;
     }
 #endif
-
-    public IDistributedCache Create() => new FASTERDistributedCache(Options, _clock, _logger);
+    internal CacheService GetCacheService() => _service ??= new(Options, _logger);
+    public IDistributedCache CreateDistributedCache() => new DistributedCache(GetCacheService(), _clock);
 }
