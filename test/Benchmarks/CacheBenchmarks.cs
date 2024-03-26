@@ -80,6 +80,8 @@ public class CacheBenchmarks : IDisposable
 
     class CountingBufferWriter : IBufferWriter<byte>, IDisposable
     {
+        // note that the memcopy is happening here - it isn't an unfair test
+
         private byte[] _buffer = ArrayPool<byte>.Shared.Rent(1000);
         public int Count { get;private set; }
 
