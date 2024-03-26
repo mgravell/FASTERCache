@@ -20,7 +20,7 @@ namespace FASTERCache;
 
 
 
-internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
+internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable, IExperimentalBufferCache
 {
     // heavily influenced by https://github.com/microsoft/FASTER/blob/main/cs/samples/CacheStore/
 
@@ -134,15 +134,14 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
 
     private static byte[] EnsureSize(ref Span<byte> target, int length)
     {
-        // TODO: stackalloc doesn't seem to be working... what are we committing?
-        // if (length > target.Length)
+        if (length > target.Length)
         {
             var arr = ArrayPool<byte>.Shared.Rent(length); ;
             target = new(arr, 0, length);
             return arr;
         }
-        //target = target.Slice(0, length);
-        //return [];
+        target = target.Slice(0, length);
+        return [];
     }
     static ReadOnlySpan<byte> WriteKey(Span<byte> target, string key, out byte[] lease)
     {
@@ -172,46 +171,54 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         return target;
     }
 
-    Memory<byte> WriteValue(byte[] value, out byte[] lease, DistributedCacheEntryOptions? options)
+    Memory<byte> WriteValue(ReadOnlySequence<byte> value, out byte[] lease, DistributedCacheEntryOptions? options)
     {
         var absoluteExpiration = GetExpiryTicks(options, out var slidingExpiration);
-        var length = value.Length + 12;
+        var length = checked((int)value.Length + 12);
         lease = ArrayPool<byte>.Shared.Rent(length);
         BinaryPrimitives.WriteInt64LittleEndian(new(lease, 0, 8), absoluteExpiration);
         BinaryPrimitives.WriteInt32LittleEndian(new(lease, 8, 4), slidingExpiration);
-        value.CopyTo(lease, 12);
+        value.CopyTo(new(lease, 12, (int)value.Length));
         return new(lease, 0, length);
     }
 
-    private async Task<byte[]?> GetAsync(string key, bool getPayload, CancellationToken token)
+    private async Task<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, CancellationToken token, Func<FASTERCacheOutput, TResult> selector)
     {
         var keyMemory = WriteKey(key, out var lease);
 
-        byte[]? finalResult = null;
         var session = GetSession();
         try
         {
-
+            TResult? finalResult = default;
             using (keyMemory.Pin())
             {
                 var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
 
-                var input = new FASTERCacheInput(getPayload ? OperationFlags.ReadArray : OperationFlags.None);
+                var input = new FASTERCacheInput(readArray ? OperationFlags.ReadArray : OperationFlags.None, bufferWriter);
 
-                var tuple = await session.ReadAsync(fixedKey, input, token: token);
-                tuple.Complete();
-                finalResult = tuple.Output.Payload;
-                Debug.WriteLine($"Read: {tuple.Status}");
-
-                if (Slide(tuple.Output, ref input))
+                var readResult = await session.ReadAsync(fixedKey, input, token: token);
+                var status = readResult.Status;
+                var output = readResult.Output;
+                if (status.IsPending)
                 {
-                    var upsert = await session.BasicContext.UpsertAsync(fixedKey, input, default, token: token);
-                    upsert.Complete();
-                    Debug.WriteLine($"Upsert (slide): {upsert.Status}");
+                    (status, output) = readResult.Complete();
                 }
-                if (finalResult is not null)
+
+                if (status.IsCompletedSuccessfully && status.Found)
                 {
-                    Debug.WriteLine("Read payload: " + BitConverter.ToString(finalResult));
+                    finalResult = selector(output);
+                    Debug.WriteLine($"Read: {status}");
+
+                    if (Slide(output, ref input))
+                    {
+                        var upsertResult = await session.BasicContext.UpsertAsync(fixedKey, input, default, token: token);
+                        status = upsertResult.Status;
+                        if (status.IsPending)
+                        {
+                            status = upsertResult.Complete();
+                        }
+                        Debug.WriteLine($"Upsert (slide): {status}");
+                    }
                 }
                 // await session.CompletePendingAsync(true, token: token);
             }
@@ -268,15 +275,15 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         }
     }
 
-    private static void ReturnLease(byte[] lease) { }// => ArrayPool<byte>.Shared.Return(lease);
+    private static void ReturnLease(byte[] lease) => ArrayPool<byte>.Shared.Return(lease);
 
     byte[]? IDistributedCache.Get(string key) => Get(key, getPayload: true);
 
-    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, getPayload: true, token: token);
+    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: true, token: token, static x => x.Payload);
 
     unsafe void IDistributedCache.Refresh(string key) => Get(key, getPayload: false);
 
-    Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, getPayload: false, token: token);
+    Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: false, token: token, static _ => true);
 
     unsafe void IDistributedCache.Remove(string key)
     {
@@ -387,7 +394,10 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
         }
     }
 
-    async Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
+    Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
+        => WriteAsync(key, new(value), options, token);
+
+    async Task WriteAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
     {
         var keyMemory = WriteKey(key, out var keyLease);
         var valueMemory = WriteValue(value, out var valueLease, options);
@@ -401,9 +411,13 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
             {
                 var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
                 var fixedValue = SpanByte.FromPinnedMemory(valueMemory);
-                var result = await session.UpsertAsync(ref fixedKey, ref fixedValue, token: token);
-                result.Complete();
-                Debug.WriteLine($"Upsert: {result.Status}");
+                var upsertResult = await session.UpsertAsync(ref fixedKey, ref fixedValue, token: token);
+                var status = upsertResult.Status;
+                if (status.IsPending)
+                {
+                    status = upsertResult.Complete();
+                }
+                Debug.WriteLine($"Upsert: {status}");
                 //await session.CompletePendingAsync(true, token: token);
             }
             ReturnLease(keyLease);
@@ -416,4 +430,10 @@ internal sealed class FASTERDistributedCache : IDistributedCache, IDisposable
             throw;
         }
     }
+
+    Task<bool> IExperimentalBufferCache.GetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
+        => GetAsync(key, bufferWriter: target, readArray: false, token: token, selector: static x => true);
+
+    Task IExperimentalBufferCache.SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
+        => WriteAsync(key, value, options, token);
 }
