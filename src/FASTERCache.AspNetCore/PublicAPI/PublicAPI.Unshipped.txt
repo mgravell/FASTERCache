@@ -1,0 +1,5 @@
+﻿#nullable enable
+FASTERCache.FASTERCacheBuilderExtensions
+Microsoft.Extensions.DependencyInjection.FASTEROutputCacheServiceExtensions
+static FASTERCache.FASTERCacheBuilderExtensions.CreateOutputCacheStore(this FASTERCache.FASTERCacheBuilder! builder) -> Microsoft.AspNetCore.OutputCaching.IOutputCacheStore!
+static Microsoft.Extensions.DependencyInjection.FASTEROutputCacheServiceExtensions.AddFASTEROutputCacheStore(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FASTERCache.FASTERCacheOptions!>? setupAction = null) -> void

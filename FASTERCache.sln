@@ -28,7 +28,12 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "docs", "docs\docs.csproj", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Benchmarks", "test\Benchmarks\Benchmarks.csproj", "{2AC02BF7-AEF3-4C7E-BB3C-87027FA01176}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FASTERCache.AspNetCore", "src\FASTERCache.AspNetCore\FASTERCache.AspNetCore.csproj", "{FB7716DD-2C86-4BFF-A446-C39EA9017CC2}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FASTERCache.AspNetCore", "src\FASTERCache.AspNetCore\FASTERCache.AspNetCore.csproj", "{FB7716DD-2C86-4BFF-A446-C39EA9017CC2}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{28087D49-51C3-42BB-AD5A-6E7F2C43BA18}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

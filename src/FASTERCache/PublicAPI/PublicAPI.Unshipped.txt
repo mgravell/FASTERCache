@@ -1,0 +1,22 @@
+﻿#nullable enable
+FASTERCache.FASTERCacheBuilder
+FASTERCache.FASTERCacheBuilder.CreateDistributedCache() -> Microsoft.Extensions.Caching.Distributed.IDistributedCache!
+FASTERCache.FASTERCacheBuilder.FASTERCacheBuilder(string! directory) -> void
+FASTERCache.FASTERCacheBuilder.WithClock(Microsoft.Extensions.Internal.ISystemClock! clock) -> FASTERCache.FASTERCacheBuilder!
+FASTERCache.FASTERCacheBuilder.WithLogger(Microsoft.Extensions.Logging.ILogger! logger) -> FASTERCache.FASTERCacheBuilder!
+FASTERCache.FASTERCacheBuilder.WithLogger(Microsoft.Extensions.Logging.ILoggerFactory! logger) -> FASTERCache.FASTERCacheBuilder!
+FASTERCache.FASTERCacheBuilder.WithOptions(System.Action<FASTERCache.FASTERCacheOptions!>! action) -> FASTERCache.FASTERCacheBuilder!
+FASTERCache.FASTERCacheOptions
+FASTERCache.FASTERCacheOptions.DeleteOnClose.get -> bool
+FASTERCache.FASTERCacheOptions.DeleteOnClose.set -> void
+FASTERCache.FASTERCacheOptions.Directory.get -> string!
+FASTERCache.FASTERCacheOptions.Directory.set -> void
+FASTERCache.FASTERCacheOptions.FASTERCacheOptions() -> void
+FASTERCache.FASTERCacheOptions.LogCapacity.get -> long
+FASTERCache.FASTERCacheOptions.LogCapacity.set -> void
+FASTERCache.FASTERCacheOptions.LogSettings.get -> FASTER.core.LogSettings!
+FASTERCache.FASTERCacheOptions.ObjectLogCapacity.get -> long
+FASTERCache.FASTERCacheOptions.ObjectLogCapacity.set -> void
+Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions
+static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.AddFASTERCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FASTERCache.FASTERCacheOptions!>! setupAction) -> void
+static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.AddFASTERDistributedCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FASTERCache.FASTERCacheOptions!>? setupAction = null) -> void
