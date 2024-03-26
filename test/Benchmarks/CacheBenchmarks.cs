@@ -104,7 +104,7 @@ public class CacheBenchmarks : IDisposable
     {
         // scramble slightly each time
         payload[payload.Length / 2]++;
-        cache.Set(key, payload);
+        cache.Set(key, payload, Expiry);
     }
     private async Task SetAsync(IDistributedCache cache)
     {
