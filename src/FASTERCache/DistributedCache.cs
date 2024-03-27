@@ -47,21 +47,6 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     })
     { }
 
-
-    private bool Slide(in Output output, ref Input input)
-    {
-        if (output.SlidingExpiration > 0)
-        {
-            var newAbsolute = NowTicks + output.SlidingExpiration;
-            if (newAbsolute > output.AbsoluteExpiration)
-            {
-                input = input.Slide(newAbsolute);
-                return true;
-            }
-        }
-        return false;
-    }
-
     const int MAX_STACKALLOC_SIZE = 128;
 
     ReadOnlySpan<byte> WriteValue(Span<byte> target, ReadOnlySequence<byte> value, out byte[] lease, DistributedCacheEntryOptions? options)
@@ -100,60 +85,30 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 Status status;
                 switch (step)
                 {
-                    case 0: goto CompletePendingRead;
-                    case 1: goto CompleteIncompleteRead;
-                    case 2: goto CompletePendingUpsert;
-                    case 3: goto CompleteIncompleteUpsert;
+                    case 0: goto CompletePendingRmw;
+                    case 1: goto CompleteIncompleteRmw;
                     default: throw new ArgumentOutOfRangeException(nameof(step));
                 }
-            CompletePendingRead:
-                state.ReadResult = await state.PendingReadResult;
-                state.PendingReadResult = IncorrectReadState;
-                status = state.ReadResult.Status;
-                output = state.ReadResult.Output;
-                if (!status.IsPending) goto ReadIsComplete;
-            CompleteIncompleteRead:
+            CompletePendingRmw:
+                state.RmwResult = await state.PendingRmwResult;
+                state.PendingRmwResult = IncorrectRwmState;
+                status = state.RmwResult.Status;
+                output = state.RmwResult.Output;
+                if (!status.IsPending) goto RmwIsComplete;
+            CompleteIncompleteRmw:
                 // WHY NO CompletePendingAsync <== (from search? this one)
                 // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
                 // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
                 // tl;dr: we should not need CompletePendingAsync
                 // await state.Session.CompletePendingAsync(token: state.Token);
-                (status, output) = state.ReadResult.Complete();
-            ReadIsComplete:
-                if (!(status.IsCompletedSuccessfully && status.Found))
-                    goto AfterSlide;
-
-                state.FinalResult = state.Selector(output);
-                Debug.WriteLine($"Read: {status}");
-
-                if (!@this.Slide(output, ref state.Input))
-                    goto AfterSlide;
-
-                unsafe
+                (status, output) = state.RmwResult.Complete();
+            RmwIsComplete:
+                if (status.IsCompletedSuccessfully && status.Found)
                 {
-                    fixed (byte* keyPtr = state.KeyLease)
-                    {
-                        // https://github.com/microsoft/FASTER/issues/444#issuecomment-809737698
-                        // "Data only needs to be fixed until the operation comes back from the initial call. When an operation goes
-                        // pending, we copy the data to an internal buffer before returning control to you, so you no longer need it fixed."
-                        var fixedKey = SpanByte.FromPointer(keyPtr, state.KeyLength);
-                        state.PendingUpsertResult = state.Session.UpsertAsync(fixedKey, state.Input, default, token: state.Token);
-                    }
+                    state.FinalResult = state.Selector(output);
                 }
+                Debug.WriteLine($"RMW: {status}");
 
-            CompletePendingUpsert:
-                state.UpsertResult = await state.PendingUpsertResult;
-                state.PendingUpsertResult = IncorrectUpsertState;
-                status = state.UpsertResult.Status;
-                if (!status.IsPending) goto UpsertIsComplete;
-            CompleteIncompleteUpsert:
-                // search: WHY NO CompletePendingAsync
-                // await state.Session.CompletePendingAsync(token: state.Token);
-                status = state.UpsertResult.Complete();
-            UpsertIsComplete:
-                Debug.WriteLine($"Upsert (slide): {status}");
-            AfterSlide:
-                ReturnLease(state.KeyLease); // doesn't matter that still pinned
                 @this.ReuseSession(state.Session);
                 return state.FinalResult;
             }
@@ -165,53 +120,33 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
     }
 
-    static readonly ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> IncorrectReadState
-        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect read state"));
+    static readonly ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> IncorrectRwmState
+        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect RMW state"));
 
-    static readonly ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> IncorrectUpsertState
-        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect upsert state"));
-
+    
     static bool Force() => true;
 
     private struct GetAsyncState<TResult> // this exists mainly so we can have a cheap call-stack for AsyncTransitionPendingRead etc
     {
-        public int KeyLength;
-        public byte[] KeyLease;
         public Input Input;
         public Func<Output, TResult> Selector;
         public CancellationToken Token;
         public ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> Session;
         public TResult? FinalResult;
-        public ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> PendingReadResult;
-        public FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty> ReadResult;
-        public ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> PendingUpsertResult;
-        public FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty> UpsertResult;
-
-        internal void EnsureKeyLeased(ReadOnlySpan<byte> key)
-        {
-            KeyLength = key.Length;
-            if (KeyLease.Length == 0) // not yet leased
-            {
-                KeyLease = ArrayPool<byte>.Shared.Rent(KeyLength);
-                key.CopyTo(KeyLease);
-            }
-        }
+        public ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> PendingRmwResult;
+        public FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty> RmwResult;
     }
 
     private unsafe ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
     {
         var state = new GetAsyncState<TResult>();
-        state.KeyLength = 0;
-        state.KeyLease = [];
         state.Input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
         state.Selector = selector;
         state.Token = token;
         state.Session = GetSession();
         state.FinalResult = default;
-        state.ReadResult = default;
-        state.UpsertResult = default;
-        state.PendingReadResult = IncorrectReadState;
-        state.PendingUpsertResult = IncorrectUpsertState;
+        state.RmwResult = default;
+        state.PendingRmwResult = IncorrectRwmState;
         return GetAsyncImpl(key, ref state);
     }
 
@@ -219,53 +154,33 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     {
         try
         {
-            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out state.KeyLease);
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             fixed (byte* keyPtr = keySpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
-
-                state.PendingReadResult = state.Session.ReadAsync(fixedKey, state.Input, token: state.Token);
-                if (!state.PendingReadResult.IsCompletedSuccessfully)
-                {
-                    state.EnsureKeyLeased(keySpan); // we'll need the key for upsert
-                    return AsyncTransitionGet(ref state, 0);
-                }
-                state.ReadResult = state.PendingReadResult.GetAwaiter().GetResult();
-                state.PendingReadResult = IncorrectReadState;
-
-                var status = state.ReadResult.Status;
-                var output = state.ReadResult.Output;
-                if (status.IsPending)
-                {
-                    state.EnsureKeyLeased(keySpan); // we'll need the key for upsert
-                    return AsyncTransitionGet(ref state, 1);
-                }
-
-                if (status.IsCompletedSuccessfully && status.Found)
-                {
-                    state.FinalResult = state.Selector(output);
-                    Debug.WriteLine($"Read: {status}");
-
-                    if (Slide(output, ref state.Input))
-                    {
-                        state.PendingUpsertResult = state.Session.UpsertAsync(fixedKey, state.Input, default, token: state.Token);
-                        if (!state.PendingUpsertResult.IsCompletedSuccessfully)
-                        {
-                            return AsyncTransitionGet(ref state, 2);
-                        }
-                        state.UpsertResult = state.PendingUpsertResult.GetAwaiter().GetResult();
-                        state.PendingUpsertResult = IncorrectUpsertState;
-
-                        status = state.UpsertResult.Status;
-                        if (status.IsPending)
-                        {
-                            return AsyncTransitionGet(ref state, 3);
-                        }
-                        Debug.WriteLine($"Upsert (slide): {status}");
-                    }
-                }
+                state.PendingRmwResult = state.Session.RMWAsync(fixedKey, state.Input, token: state.Token);
             }
-            ReturnLease(state.KeyLease);
+            ReturnLease(lease);
+
+            if (!state.PendingRmwResult.IsCompletedSuccessfully)
+            {
+                return AsyncTransitionGet(ref state, 0);
+            }
+            state.RmwResult = state.PendingRmwResult.GetAwaiter().GetResult();
+            state.PendingRmwResult = IncorrectRwmState;
+
+            var status = state.RmwResult.Status;
+            var output = state.RmwResult.Output;
+            if (status.IsPending)
+            {
+                return AsyncTransitionGet(ref state, 1);
+            }
+
+            if (status.IsCompletedSuccessfully && status.Found)
+            {
+                state.FinalResult = state.Selector(output);
+                Debug.WriteLine($"Read: {status}");
+            }
             ReuseSession(state.Session);
             return new(state.FinalResult);
         }
@@ -293,18 +208,13 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
                 var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
                 Output output = default;
-                var status = session.Read(ref fixedKey, ref input, ref output);
+                var status = session.RMW(ref fixedKey, ref input, ref output);
                 if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
-                Debug.WriteLine($"Read: {status}");
-                finalResult = selector(output);
-
-                if (Slide(in output, ref input))
+                if (status.IsCompletedSuccessfully && status.Found)
                 {
-                    SpanByte payload = default;
-                    var upsert = session.Upsert(ref fixedKey, ref input, ref payload, ref output);
-                    if (upsert.IsPending) CompleteSinglePending(session, ref status, ref output);
-                    Debug.WriteLine($"Upsert (slide): {upsert}");
+                    finalResult = selector(output);
                 }
+                Debug.WriteLine($"RMW: {status}");
             }
             ReturnLease(lease);
             ReuseSession(session);
