@@ -103,6 +103,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var output = readResult.Output;
                 if (status.IsPending)
                 {
+                    await session.CompletePendingAsync(token: token);
                     (status, output) = readResult.Complete();
                 }
 
@@ -117,12 +118,12 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                         status = upsertResult.Status;
                         if (status.IsPending)
                         {
+                            await session.CompletePendingAsync(token: token);
                             status = upsertResult.Complete();
                         }
                         Debug.WriteLine($"Upsert (slide): {status}");
                     }
                 }
-                // await session.CompletePendingAsync(true, token: token);
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -221,9 +222,13 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             {
                 var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
                 var result = await session.DeleteAsync(ref fixedKey, token: token);
-                result.Complete();
-                Debug.WriteLine($"Delete: {result.Status}");
-                // await session.CompletePendingAsync(true, token: token);
+                var status = result.Status;
+                if (status.IsPending)
+                {
+                    await session.CompletePendingAsync(token: token);
+                    status = result.Complete();
+                }
+                Debug.WriteLine($"Delete: {status}");
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -316,10 +321,10 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var status = upsertResult.Status;
                 if (status.IsPending)
                 {
+                    await session.CompletePendingAsync(token: token);
                     status = upsertResult.Complete();
                 }
                 Debug.WriteLine($"Upsert: {status}");
-                //await session.CompletePendingAsync(true, token: token);
             }
             ReturnLease(keyLease);
             ReturnLease(valueLease);
