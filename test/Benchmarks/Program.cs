@@ -1,5 +1,6 @@
-﻿#if DEBUG
-using FASTERCache;
+﻿using FASTERCache;
+
+#if DEBUG
 using System;
 
 using var obj = new CacheBenchmarks();
@@ -17,6 +18,7 @@ obj.SQLite_Set();
 await obj.SQLite_SetAsync();
 Console.WriteLine(obj.SQLite_Get());
 Console.WriteLine(await obj.SQLite_GetAsync());
+Console.WriteLine();
 
 #if NET8_0_OR_GREATER
 obj.Rocks_Set();
@@ -25,9 +27,10 @@ Console.WriteLine(obj.Rocks_Get());
 Console.WriteLine(await obj.Rocks_GetAsync());
 #endif
 
+Console.WriteLine(CacheBenchmarks.CountingBufferWriter.InstanceCount);
+
 #else
 using BenchmarkDotNet.Running;
-using FASTERCache;
 
 BenchmarkRunner.Run<CacheBenchmarks>();
 #endif

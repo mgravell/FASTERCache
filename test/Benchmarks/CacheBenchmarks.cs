@@ -10,6 +10,7 @@ using System;
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace FASTERCache;
@@ -83,13 +84,19 @@ public class CacheBenchmarks : IDisposable
     private int Get(IDistributedCache cache) => Assert(cache.Get(key));
     private int GetNew(IExperimentalBufferCache cache)
     {
-        using var bw = new CountingBufferWriter();
+        using var bw = CountingBufferWriter.Create();
         return Assert(cache.Get(key, bw) ? bw.Count : -1);
     }
     private async ValueTask<int> GetAsync(IDistributedCache cache) => Assert(await cache.GetAsync(key));
 
-    class CountingBufferWriter : IBufferWriter<byte>, IDisposable
+    internal sealed class CountingBufferWriter : IBufferWriter<byte>, IDisposable
     {
+        private static int _instanceCount;
+        public static int InstanceCount => Volatile.Read(ref _instanceCount);
+        private CountingBufferWriter() => Interlocked.Increment(ref _instanceCount);
+        private static CountingBufferWriter? _spare;
+        public static CountingBufferWriter Create() => Interlocked.Exchange(ref _spare, null) ?? new();
+
         // note that the memcopy is happening here - it isn't an unfair test
 
         private byte[] _buffer = ArrayPool<byte>.Shared.Rent(1000);
@@ -97,16 +104,36 @@ public class CacheBenchmarks : IDisposable
 
         public void Advance(int count) => Count += count;
 
-        public void Dispose() => ArrayPool<byte>.Shared.Return(_buffer);
+        public void Dispose()
+        {
+            Count = 0;
+            if (Interlocked.CompareExchange(ref _spare, this, null) != null)
+            {
+                ArrayPool<byte>.Shared.Return(_buffer);
+            }
+        }
 
         public Memory<byte> GetMemory(int sizeHint = 0) => _buffer;
 
         public Span<byte> GetSpan(int sizeHint = 0) => _buffer;
     }
-    private async ValueTask<int> GetAsyncNew(IExperimentalBufferCache cache)
+    private ValueTask<int> GetAsyncNew(IExperimentalBufferCache cache)
     {
-        using var bw = new CountingBufferWriter();
-        return Assert(await cache.GetAsync(key, bw) ? bw.Count : -1);
+        var bw = CountingBufferWriter.Create();
+        var pending = cache.GetAsync(key, bw);
+        if (!pending.IsCompletedSuccessfully) return Awaited(this, pending, bw);
+        
+        int count = pending.GetAwaiter().GetResult() ? bw.Count : -1;
+        bw.Dispose();
+        return new(Assert(count));
+
+        static async ValueTask<int> Awaited(CacheBenchmarks @this, ValueTask<bool> pending, CountingBufferWriter bw)
+        {
+            using (bw)
+            {
+                return @this.Assert(await pending ? bw.Count : -1);
+            }
+        }
     }
 
     private int Assert(int length)
