@@ -30,16 +30,16 @@ public class CacheBenchmarks : IDisposable
     public int PayloadLength { get; set; } = 1024;
 
     private string key = "";
-    private byte[] payload = [];
+    private Memory<byte> payload = default; // we intentionally want to show impact of needing write-sized array on write path
 
     [GlobalSetup]
     public void Init()
     {
         const string alphabet = @"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_!@#[]/\-+=";
         var rand = new Random();
-        var arr = new byte[PayloadLength];
+        var arr = new byte[PayloadLength + 128];
         rand.NextBytes(arr);
-        payload = arr;
+        payload = new (arr, 0, PayloadLength);
         var chars = new char[KeyLength];
         for (int i = 0; i < chars.Length; i++)
         {
@@ -47,8 +47,12 @@ public class CacheBenchmarks : IDisposable
         }
         key = new string(chars);
 
-        _faster.Set(key, payload);
-        _sqlite.Set(key, payload);
+        var finalArr = payload.ToArray();
+        _faster.Set(key, finalArr);
+        _sqlite.Set(key, finalArr);
+#if NET8_0_OR_GREATER
+        _rocks.Set(key, finalArr);
+#endif
     }
     public CacheBenchmarks()
     {
@@ -124,14 +128,14 @@ public class CacheBenchmarks : IDisposable
     private void Set(IDistributedCache cache)
     {
         // scramble slightly each time
-        payload[payload.Length / 2]++;
-        cache.Set(key, payload, Expiry);
+        payload.Span[payload.Length / 2]++;
+        cache.Set(key, payload.ToArray(), Expiry);
     }
 
     private void SetNew(IExperimentalBufferCache cache)
     {
         // scramble slightly each time
-        payload[payload.Length / 2]++;
+        payload.Span[payload.Length / 2]++;
         ReadOnlySequence<byte> ros = new(payload);
         cache.Set(key, ros, Expiry);
     }
@@ -139,8 +143,8 @@ public class CacheBenchmarks : IDisposable
     private async Task SetAsync(IDistributedCache cache)
     {
         // scramble slightly each time
-        payload[payload.Length / 2]++;
-        await cache.SetAsync(key, payload, Expiry);
+        payload.Span[payload.Length / 2]++;
+        await cache.SetAsync(key, payload.ToArray(), Expiry);
     }
 
     private static DistributedCacheEntryOptions Expiry = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
@@ -148,7 +152,7 @@ public class CacheBenchmarks : IDisposable
     private async Task SetAsyncNew(IExperimentalBufferCache cache)
     {
         // scramble slightly each time
-        payload[payload.Length / 2]++;
+        payload.Span[payload.Length / 2]++;
         ReadOnlySequence<byte> ros = new(payload);
         await cache.SetAsync(key, ros, Expiry);
     }

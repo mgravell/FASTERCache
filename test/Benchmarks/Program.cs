@@ -10,10 +10,14 @@ Console.WriteLine(obj.FASTER_Get());
 Console.WriteLine(await obj.FASTER_GetAsync());
 await obj.FASTER_SetAsyncBuffer();
 Console.WriteLine(await obj.FASTER_GetAsyncBuffer());
+obj.FASTER_SetBuffer();
+Console.WriteLine(obj.FASTER_GetBuffer());
+
 obj.SQLite_Set();
 await obj.SQLite_SetAsync();
 Console.WriteLine(obj.SQLite_Get());
 Console.WriteLine(await obj.SQLite_GetAsync());
+
 #if NET8_0_OR_GREATER
 obj.Rocks_Set();
 await obj.Rocks_SetAsync();
