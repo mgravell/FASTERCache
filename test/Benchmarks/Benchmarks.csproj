@@ -6,7 +6,7 @@
 
     <ItemGroup>
         <PackageReference Include="BenchmarkDotNet" />
-        <PackageReference Include="FusionRocks" Condition="'$(TargetFramework)'=='net8.0'"/>
+        <!--<PackageReference Include="FusionRocks" Condition="'$(TargetFramework)'=='net8.0'"/>-->
         <PackageReference Include="NeoSmart.Caching.Sqlite" />
         <PackageReference Include="NeoSmart.Caching.Sqlite.AspNetCore" />
     </ItemGroup>

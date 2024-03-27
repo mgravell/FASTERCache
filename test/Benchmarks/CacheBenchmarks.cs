@@ -1,5 +1,5 @@
 ﻿using BenchmarkDotNet.Attributes;
-#if NET8_0_OR_GREATER
+#if NET8_0_OR_GREATER && FUSIONROCKS
 using FusionRocks;
 #endif
 using Microsoft.Extensions.Caching.Distributed;
@@ -20,7 +20,7 @@ public class CacheBenchmarks : IDisposable
 {
     private readonly IDistributedCache _faster, _sqlite;
     private readonly IExperimentalBufferCache _fasterBuffer;
-#if NET8_0_OR_GREATER
+#if NET8_0_OR_GREATER && FUSIONROCKS
     private readonly IDistributedCache _rocks;
 #endif
 
@@ -51,7 +51,7 @@ public class CacheBenchmarks : IDisposable
         var finalArr = payload.ToArray();
         _faster.Set(key, finalArr);
         _sqlite.Set(key, finalArr);
-#if NET8_0_OR_GREATER
+#if NET8_0_OR_GREATER && FUSIONROCKS
         _rocks.Set(key, finalArr);
 #endif
     }
@@ -66,7 +66,7 @@ public class CacheBenchmarks : IDisposable
         services.AddSqliteCache(options => options.CachePath = @"sqlite.db", null!);
         _sqlite = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
 
-#if NET8_0_OR_GREATER
+#if NET8_0_OR_GREATER && FUSIONROCKS
         _rocks = new FusionRocks.FusionRocks(new FusionRocksOptions { CachePath = "rocks" });
 #endif
     }
@@ -76,7 +76,7 @@ public class CacheBenchmarks : IDisposable
         GC.SuppressFinalize(this);
         (_faster as IDisposable)?.Dispose();
         (_sqlite as IDisposable)?.Dispose();
-#if NET8_0_OR_GREATER
+#if NET8_0_OR_GREATER && FUSIONROCKS
         (_rocks as IDisposable)?.Dispose();
 #endif
     }
@@ -218,7 +218,7 @@ public class CacheBenchmarks : IDisposable
     [Benchmark]
     public Task SQLite_SetAsync() => SetAsync(_sqlite);
 
-#if NET8_0_OR_GREATER
+#if NET8_0_OR_GREATER && FUSIONROCKS
     [Benchmark]
     public int Rocks_Get() => Get(_rocks);
 

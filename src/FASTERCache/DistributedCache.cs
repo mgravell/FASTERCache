@@ -70,10 +70,18 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         return new(lease, 0, length);
     }
 
+    [Conditional("DEBUGTRACE")]
+    static partial void DebugTrace(string message);
+#if DEBUGTRACE
+    static partial void DebugTrace(string message) => DebugTrace(message);
+#endif
 
+    public static int AsyncCount => Volatile.Read(ref asyncCount);
+    private static int asyncCount;
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ValueTask<TResult?> AsyncTransitionGet<TResult>(ref GetAsyncState<TResult> state, int step)
     {
+        Interlocked.Increment(ref asyncCount);
         return AsyncTransitionGetImpl(this, state, step);
 
         static async ValueTask<TResult?> AsyncTransitionGetImpl(
@@ -107,7 +115,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 {
                     state.FinalResult = state.Selector(output);
                 }
-                Debug.WriteLine($"RMW: {status}");
+                DebugTrace($"RMW: {status}");
 
                 @this.ReuseSession(state.Session);
                 return state.FinalResult;
@@ -179,7 +187,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             if (status.IsCompletedSuccessfully && status.Found)
             {
                 state.FinalResult = state.Selector(output);
-                Debug.WriteLine($"Read: {status}");
+                DebugTrace($"Read: {status}");
             }
             ReuseSession(state.Session);
             return new(state.FinalResult);
@@ -214,7 +222,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 {
                     finalResult = selector(output);
                 }
-                Debug.WriteLine($"RMW: {status}");
+                DebugTrace($"RMW: {status}");
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -252,7 +260,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     Unsafe.SkipInit(out dummy);
                     CompleteSinglePending(session, ref status, ref dummy);
                 }
-                Debug.WriteLine($"Delete: {status}");
+                DebugTrace($"Delete: {status}");
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -282,7 +290,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     // await session.CompletePendingAsync(token: token);
                     status = result.Complete();
                 }
-                Debug.WriteLine($"Delete: {status}");
+                DebugTrace($"Delete: {status}");
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -336,7 +344,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         var session = GetSession();
         try
         {
-            Debug.WriteLine("Write: " + BitConverter.ToString(valueSpan.Slice(12).ToArray()));
+            DebugTrace("Write: " + BitConverter.ToString(valueSpan.Slice(12).ToArray()));
             fixed (byte* keyPtr = keySpan)
             fixed (byte* valuePtr = valueSpan)
             {
@@ -349,7 +357,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     Unsafe.SkipInit(out dummy);
                     CompleteSinglePending(session, ref status, ref dummy);
                 }
-                Debug.WriteLine($"Upsert: {status}");
+                DebugTrace($"Upsert: {status}");
             }
             ReturnLease(keyLease);
             ReturnLease(valueLease);
@@ -375,7 +383,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         var session = GetSession();
         try
         {
-            Debug.WriteLine("Write: " + BitConverter.ToString(valueMemory.Slice(12).ToArray()));
+            DebugTrace("Write: " + BitConverter.ToString(valueMemory.Slice(12).ToArray()));
             using (keyMemory.Pin()) // TODO: better pinning
             using (valueMemory.Pin())
             {
@@ -389,7 +397,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     // await session.CompletePendingAsync(token: token);
                     status = upsertResult.Complete();
                 }
-                Debug.WriteLine($"Upsert: {status}");
+                DebugTrace($"Upsert: {status}");
             }
             ReturnLease(keyLease);
             ReturnLease(valueLease);
