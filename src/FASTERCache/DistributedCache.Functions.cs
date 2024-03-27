@@ -61,12 +61,11 @@ partial class DistributedCache
                 {
                     // update the expiry and commit
                     BinaryPrimitives.WriteInt64LittleEndian(span, newAbsolute);
-                    return true;
                 }
             }
 
             // else no change
-            return false;
+            return true;
         }
         public override bool NeedInitialUpdate(ref SpanByte key, ref Input input, ref Output output, ref RMWInfo rmwInfo) => false;
         public override bool NeedCopyUpdate(ref SpanByte key, ref Input input, ref SpanByte oldValue, ref Output output, ref RMWInfo rmwInfo) => false;
