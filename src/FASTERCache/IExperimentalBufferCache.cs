@@ -9,4 +9,7 @@ internal interface IExperimentalBufferCache : IDistributedCache
 {
     ValueTask<bool> GetAsync(string key, IBufferWriter<byte> target, CancellationToken token = default);
     ValueTask SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token = default);
+
+    bool Get(string key, IBufferWriter<byte> target);
+    void Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options);
 }

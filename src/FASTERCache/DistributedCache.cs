@@ -64,10 +64,10 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     const int MAX_STACKALLOC_SIZE = 128;
 
-    ReadOnlySpan<byte> WriteValue(Span<byte> target, byte[] value, out byte[] lease, DistributedCacheEntryOptions? options)
+    ReadOnlySpan<byte> WriteValue(Span<byte> target, ReadOnlySequence<byte> value, out byte[] lease, DistributedCacheEntryOptions? options)
     {
         var absoluteExpiration = GetExpiryTicks(options, out var slidingExpiration);
-        lease = EnsureSize(ref target, value.Length + 12);
+        lease = EnsureSize(ref target, checked((int)value.Length + 12));
         BinaryPrimitives.WriteInt64LittleEndian(target.Slice(0, 8), absoluteExpiration);
         BinaryPrimitives.WriteInt32LittleEndian(target.Slice(8, 4), slidingExpiration);
         value.CopyTo(target.Slice(12));
@@ -272,11 +272,11 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
     const int MAX_STACKALLOC = 128;
-    private unsafe byte[]? Get(string key, bool getPayload)
+    private unsafe TResult? Get<TResult>(string key, bool readArray, Func<Output, TResult> selector, IBufferWriter<byte>? bufferWriter = null)
     {
         var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
 
-        byte[]? finalResult = null;
+        TResult? finalResult = default;
         var session = GetSession();
         try
         {
@@ -285,21 +285,17 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
 
-                var input = new Input(getPayload ? Input.OperationFlags.ReadArray : Input.OperationFlags.None);
+                var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
                 Output output = default;
                 var status = session.Read(ref fixedKey, ref input, ref output);
                 Debug.WriteLine($"Read: {status}");
-                finalResult = output.Payload;
+                finalResult = selector(output);
 
                 if (Slide(in output, ref input))
                 {
                     SpanByte payload = default;
                     var upsert = session.BasicContext.Upsert(ref fixedKey, ref input, ref payload, ref output);
                     Debug.WriteLine($"Upsert (slide): {upsert}");
-                }
-                if (finalResult is not null)
-                {
-                    Debug.WriteLine("Read payload: " + BitConverter.ToString(finalResult));
                 }
                 session.CompletePending(true);
             }
@@ -314,11 +310,11 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
     }
 
-    byte[]? IDistributedCache.Get(string key) => Get(key, getPayload: true);
+    byte[]? IDistributedCache.Get(string key) => Get(key, readArray: true, selector: x => x.Payload);
 
     Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: true, selector: static x => x.Payload, token: token).AsTask();
 
-    unsafe void IDistributedCache.Refresh(string key) => Get(key, getPayload: false);
+    unsafe void IDistributedCache.Refresh(string key) => Get(key, readArray: false, selector: x => true);
 
     Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: false, selector: static _ => true, token: token).AsTask();
 
@@ -406,6 +402,9 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     private static readonly long OneMinuteTicks = TimeSpan.FromMinutes(1).Ticks;
 
     unsafe void IDistributedCache.Set(string key, byte[] value, DistributedCacheEntryOptions options)
+        => Write(key, new(value), options);
+
+    unsafe void Write(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
     {
         var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var keyLease);
         var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default,
@@ -475,8 +474,14 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
     ValueTask<bool> IExperimentalBufferCache.GetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
-        => GetAsync(key, bufferWriter: target, readArray: false, token: token, selector: static x => true);
+        => GetAsync(key, bufferWriter: target, readArray: false, token: token, selector: static _ => true);
 
     ValueTask IExperimentalBufferCache.SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
         => WriteAsync(key, value, options, token);
+
+    bool IExperimentalBufferCache.Get(string key, IBufferWriter<byte> target)
+        => Get(key, bufferWriter: target, readArray: false, selector: static _ => true);
+
+    void IExperimentalBufferCache.Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
+        => Write(key, value, options);
 }
