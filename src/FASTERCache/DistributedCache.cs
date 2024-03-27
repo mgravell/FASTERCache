@@ -7,7 +7,6 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,7 +15,7 @@ namespace FASTERCache;
 /// <summary>
 /// Implements IDistributedCache
 /// </summary>
-internal sealed partial class DistributedCache : CacheBase<DistributedCache.Input, DistributedCache.Output, Empty, DistributedCache.CacheFunctions>,  IDistributedCache, IDisposable, IExperimentalBufferCache
+internal sealed partial class DistributedCache : CacheBase<DistributedCache.Input, DistributedCache.Output, Empty, DistributedCache.CacheFunctions>, IDistributedCache, IDisposable, IExperimentalBufferCache
 {
     protected override byte KeyPrefix => (byte)'D';
 
@@ -86,69 +85,76 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
 
-    private async ValueTask<TResult?> AsyncGetTransition<TResult>(Memory<byte> keyMemory, byte[] lease,
-        ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
-        Status status, Output output,
-        ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> pendingReadResult,
-        FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty> readResult,
-        ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> pendingUpsertResult,
-        FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty> upsertResult,
-        Input input, Func<Output, TResult> selector, TResult? finalResult, int step, CancellationToken token)
+    private ValueTask<TResult?> AsyncTransitionGet<TResult>(ref GetAsyncState<TResult> state, int step)
     {
-        // we must happen *before* any async transition, while the buffer is fixed
-        var keyPin = GCHandle.Alloc(lease, GCHandleType.Pinned);
-        try
+        return AsyncTransitionGetImpl(this, state, step);
+
+        static async ValueTask<TResult?> AsyncTransitionGetImpl(
+        DistributedCache @this, GetAsyncState<TResult> state, int step)
         {
-            var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
-            switch (step)
+            try
             {
-                case 0: goto CompletePendingRead;
-                case 1: goto CompleteIncompleteRead;
-                case 2: goto CompletePendingUpsert;
-                case 3: goto CompleteIncompleteUpsert;
-                default: throw new ArgumentOutOfRangeException(nameof(step));
+                Output output;
+                Status status;
+                switch (step)
+                {
+                    case 0: goto CompletePendingRead;
+                    case 1: goto CompleteIncompleteRead;
+                    case 2: goto CompletePendingUpsert;
+                    case 3: goto CompleteIncompleteUpsert;
+                    default: throw new ArgumentOutOfRangeException(nameof(step));
+                }
+            CompletePendingRead:
+                state.ReadResult = await state.PendingReadResult;
+                state.PendingReadResult = IncorrectReadState;
+                status = state.ReadResult.Status;
+                output = state.ReadResult.Output;
+                if (!status.IsPending) goto ReadIsComplete;
+                CompleteIncompleteRead:
+                await state.Session.CompletePendingAsync(token: state.Token);
+                (status, output) = state.ReadResult.Complete();
+            ReadIsComplete:
+                if (!(status.IsCompletedSuccessfully && status.Found))
+                    goto AfterSlide;
+
+                state.FinalResult = state.Selector(output);
+                Debug.WriteLine($"Read: {status}");
+
+                if (!@this.Slide(output, ref state.Input))
+                    goto AfterSlide;
+
+                unsafe
+                {
+                    fixed (byte* keyPtr = state.KeyLease)
+                    {
+                        // https://github.com/microsoft/FASTER/issues/444#issuecomment-809737698
+                        // "Data only needs to be fixed until the operation comes back from the initial call. When an operation goes
+                        // pending, we copy the data to an internal buffer before returning control to you, so you no longer need it fixed."
+                        var fixedKey = SpanByte.FromPointer(keyPtr, state.KeyLength);
+                        state.PendingUpsertResult = state.Session.UpsertAsync(fixedKey, state.Input, default, token: state.Token);
+                    }
+                }
+
+            CompletePendingUpsert:
+                state.UpsertResult = await state.PendingUpsertResult;
+                state.PendingUpsertResult = IncorrectUpsertState;
+                status = state.UpsertResult.Status;
+                if (!status.IsPending) goto UpsertIsComplete;
+                CompleteIncompleteUpsert:
+                await state.Session.CompletePendingAsync(token: state.Token);
+                status = state.UpsertResult.Complete();
+            UpsertIsComplete:
+                Debug.WriteLine($"Upsert (slide): {status}");
+            AfterSlide:
+                ReturnLease(state.KeyLease); // doesn't matter that still pinned
+                @this.ReuseSession(state.Session);
+                return state.FinalResult;
             }
-CompletePendingRead:
-            readResult = await pendingReadResult;
-            status = readResult.Status;
-            output = readResult.Output;
-            if (!status.IsPending) goto ReadIsComplete;
-CompleteIncompleteRead:
-            await session.CompletePendingAsync(token: token);
-            (status, output) = readResult.Complete();
-ReadIsComplete:
-            if (!(status.IsCompletedSuccessfully && status.Found))
-                goto AfterSlide;
-            
-            finalResult = selector(output);
-            Debug.WriteLine($"Read: {status}");
-
-            if (!Slide(output, ref input))
-                goto AfterSlide;
-
-            pendingUpsertResult = session.BasicContext.UpsertAsync(fixedKey, input, default, token: token);
-CompletePendingUpsert:
-            upsertResult = await pendingUpsertResult;
-            status = upsertResult.Status;
-            if (!status.IsPending) goto UpsertIsComplete;
-CompleteIncompleteUpsert:
-            await session.CompletePendingAsync(token: token);
-            status = upsertResult.Complete();
-UpsertIsComplete:
-            Debug.WriteLine($"Upsert (slide): {status}");
-AfterSlide:
-            ReturnLease(lease); // doesn't matter that still pinned
-            ReuseSession(session);
-            return finalResult;
-        }
-        catch
-        {
-            FaultSession(session);
-            throw;
-        }
-        finally
-        {
-            keyPin.Free();
+            catch
+            {
+                FaultSession(state.Session);
+                throw;
+            }
         }
     }
 
@@ -159,75 +165,92 @@ AfterSlide:
         = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect upsert state"));
 
     static bool Force() => true;
-    private unsafe ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, CancellationToken token, Func<Output, TResult> selector)
-    {
-        var keyMemory = WriteKey(key, out var lease);
 
-        var session = GetSession();
+    private struct GetAsyncState<TResult> // this exists mainly so we can have a cheap call-stack for AsyncTransitionPendingRead etc
+    {
+        public int KeyLength;
+        public byte[] KeyLease;
+        public Input Input;
+        public Func<Output, TResult> Selector;
+        public CancellationToken Token;
+        public ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> Session;
+        public TResult? FinalResult;
+        public ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> PendingReadResult;
+        public FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty> ReadResult;
+        public ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> PendingUpsertResult;
+        public FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty> UpsertResult;
+    }
+
+    private unsafe ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
+    {
+        var state = new GetAsyncState<TResult>();
+        state.KeyLength = WriteKey(key, out state.KeyLease);
+        state.Input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
+        state.Selector = selector;
+        state.Token = token;
+        state.Session = GetSession();
+        state.FinalResult = default;
+        state.ReadResult = default;
+        state.UpsertResult = default;
+        state.PendingReadResult = IncorrectReadState;
+        state.PendingUpsertResult = IncorrectUpsertState;
+        return GetAsyncImpl(ref state);
+    }
+
+    private unsafe ValueTask<TResult?> GetAsyncImpl<TResult>(ref GetAsyncState<TResult> state)
+    {
         try
         {
-            TResult? finalResult = default;
-            fixed (byte* keyPtr = lease)
+            fixed (byte* keyPtr = state.KeyLease)
             {
-                var fixedKey = SpanByte.FromPointer(keyPtr, keyMemory.Length);
+                var fixedKey = SpanByte.FromPointer(keyPtr, state.KeyLength);
 
-                var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
-
-                Status status = default;
-                Output output = default;
-                var pendingUpsertResult = IncorrectUpsertState; // force exception if awaited inappropriately
-                FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty> readResult = default;
-                FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty> upsertResult = default;
-                var pendingReadResult = session.ReadAsync(fixedKey, input, token: token);
-                if (!pendingReadResult.IsCompletedSuccessfully)
+                state.PendingReadResult = state.Session.ReadAsync(fixedKey, state.Input, token: state.Token);
+                if (!state.PendingReadResult.IsCompletedSuccessfully)
                 {
-                    return AsyncGetTransition(keyMemory, lease, session, status, output,
-                        pendingReadResult, readResult, pendingUpsertResult, upsertResult, input, selector, finalResult, 0, token);
+                    return AsyncTransitionGet(ref state, 0);
                 }
+                state.ReadResult = state.PendingReadResult.GetAwaiter().GetResult();
+                state.PendingReadResult = IncorrectReadState;
 
-                readResult = pendingReadResult.GetAwaiter().GetResult();
-                pendingReadResult = IncorrectReadState; // force exception if awaited inappropriately
-
-                status = readResult.Status;
-                output = readResult.Output;
+                var status = state.ReadResult.Status;
+                var output = state.ReadResult.Output;
                 if (status.IsPending)
                 {
-                    return AsyncGetTransition(keyMemory, lease, session, status, output,
-                        pendingReadResult, readResult, pendingUpsertResult, upsertResult, input, selector, finalResult, 1, token);
+                    return AsyncTransitionGet(ref state, 1);
                 }
 
                 if (status.IsCompletedSuccessfully && status.Found)
                 {
-                    finalResult = selector(output);
+                    state.FinalResult = state.Selector(output);
                     Debug.WriteLine($"Read: {status}");
 
-                    if (Slide(output, ref input))
+                    if (Slide(output, ref state.Input))
                     {
-                        pendingUpsertResult = session.BasicContext.UpsertAsync(fixedKey, input, default, token: token);
-                        if (!pendingReadResult.IsCompletedSuccessfully)
+                        state.PendingUpsertResult = state.Session.UpsertAsync(fixedKey, state.Input, default, token: state.Token);
+                        if (!state.PendingUpsertResult.IsCompletedSuccessfully)
                         {
-                            return AsyncGetTransition(keyMemory, lease, session, status, output,
-                                pendingReadResult, readResult, pendingUpsertResult, upsertResult, input, selector, finalResult, 2, token);
+                            return AsyncTransitionGet(ref state, 2);
                         }
-                        upsertResult = pendingUpsertResult.GetAwaiter().GetResult();
-                        pendingUpsertResult = IncorrectUpsertState; // force exception if awaited inappropriately
-                        status = upsertResult.Status;
+                        state.UpsertResult = state.PendingUpsertResult.GetAwaiter().GetResult();
+                        state.PendingUpsertResult = IncorrectUpsertState;
+
+                        status = state.UpsertResult.Status;
                         if (status.IsPending)
                         {
-                            return AsyncGetTransition(keyMemory, lease, session, status, output,
-                                pendingReadResult, readResult, pendingUpsertResult, upsertResult, input, selector, finalResult, 3, token);
+                            return AsyncTransitionGet(ref state, 3);
                         }
                         Debug.WriteLine($"Upsert (slide): {status}");
                     }
                 }
             }
-            ReturnLease(lease);
-            ReuseSession(session);
-            return new(finalResult);
+            ReturnLease(state.KeyLease);
+            ReuseSession(state.Session);
+            return new(state.FinalResult);
         }
         catch
         {
-            FaultSession(session);
+            FaultSession(state.Session);
             throw;
         }
     }
@@ -277,11 +300,11 @@ AfterSlide:
 
     byte[]? IDistributedCache.Get(string key) => Get(key, getPayload: true);
 
-    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: true, token: token, static x => x.Payload).AsTask();
+    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: true, selector: static x => x.Payload, token: token).AsTask();
 
     unsafe void IDistributedCache.Refresh(string key) => Get(key, getPayload: false);
 
-    Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: false, token: token, static _ => true).AsTask();
+    Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: false, selector: static _ => true, token: token).AsTask();
 
     unsafe void IDistributedCache.Remove(string key)
     {
@@ -309,8 +332,8 @@ AfterSlide:
 
     async Task IDistributedCache.RemoveAsync(string key, CancellationToken token)
     {
-        var keyMemory = WriteKey(key, out var lease);
-
+        var keyLength = WriteKey(key, out var lease);
+        var keyMemory = new Memory<byte>(lease, 0, keyLength);
         var session = GetSession();
         try
         {
@@ -399,9 +422,11 @@ AfterSlide:
     Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
         => WriteAsync(key, new(value), options, token).AsTask();
 
+
     async ValueTask WriteAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
     {
-        var keyMemory = WriteKey(key, out var keyLease);
+        var keyLength = WriteKey(key, out var keyLease);
+        var keyMemory = new Memory<byte>(keyLease, 0, keyLength);
         var valueMemory = WriteValue(value, out var valueLease, options);
 
         var session = GetSession();
