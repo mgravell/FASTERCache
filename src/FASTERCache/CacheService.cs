@@ -29,7 +29,6 @@ internal sealed class CacheService
         var logSettings = config.LogSettings;
         // create decives if not already specified
         logSettings.LogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.log"), capacity: config.LogCapacity, deleteOnClose: config.DeleteOnClose);
-        logSettings.ObjectLogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.obj.log"), capacity: config.ObjectLogCapacity, deleteOnClose: config.DeleteOnClose);
 
         // Create instance of store
         _cache = new(
