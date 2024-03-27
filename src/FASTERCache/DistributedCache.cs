@@ -7,6 +7,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -85,6 +86,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private ValueTask<TResult?> AsyncTransitionGet<TResult>(ref GetAsyncState<TResult> state, int step)
     {
         return AsyncTransitionGetImpl(this, state, step);
