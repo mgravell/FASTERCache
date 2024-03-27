@@ -97,6 +97,7 @@ internal abstract class CacheBase<TInput, TOutput, TContext, TFunctions> : Cache
             ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, TContext> current = ref outputs.Current;
             status = current.Status;
             output = current.Output;
+            count++;
         }
         if (count != 1) Throw();
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -12,6 +13,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
 {
     private IDistributedCache Cache => fixture.Cache;
     private IExperimentalBufferCache BufferCache => fixture.BufferCache;
+    private const int PageSizeBits = 12;
 
     public sealed class CacheInstance : IDisposable
     {
@@ -31,7 +33,14 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
 #else
             services.AddSingleton<ISystemClock>(time);
 #endif
-            services.AddFASTERDistributedCache(options => options.Directory = "cachedir");
+            services.AddFASTERDistributedCache(options =>
+            {
+                options.Directory = "cachedir";
+                options.LogSettings.PageSizeBits = PageSizeBits;
+                options.LogSettings.MemorySizeBits = options.LogSettings.PageSizeBits + 2;
+                options.LogSettings.SegmentSizeBits = options.LogSettings.MemorySizeBits + 2;
+                options.DeleteOnClose = true;
+            });
             provider = services.BuildServiceProvider();
             cache = provider.GetRequiredService<IDistributedCache>();
         }
@@ -107,6 +116,8 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
     }
 
     private static readonly DistributedCacheEntryOptions RelativeFiveMinutes = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) };
+
+    private static readonly DistributedCacheEntryOptions RelativeNever = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(1000) };
 
     private static readonly DistributedCacheEntryOptions SlidingOneMinute = new() { SlidingExpiration = TimeSpan.FromMinutes(1) };
 
@@ -224,4 +235,61 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         Assert.Null(retrieved);
     }
 
+    [Fact]
+    public async Task SlidingExpirationForcedAsync()
+    {
+        var key = Caller();
+        Assert.Null(await Cache.GetAsync(key));
+        var original = Guid.NewGuid().ToByteArray();
+        // memory size is PageSizeBits+2
+        //init with trash
+        byte[] trashData = new byte[1 << (PageSizeBits - 1)]; // try different sizes, -1 fails, -10 works
+        Random.Shared.NextBytes(trashData);
+        List<string> trashKeys = new();
+        for (int i = 0; i < 16; i++)
+        {
+            var trashKey = Guid.NewGuid().ToString("N");
+            trashKeys.Add(trashKey);
+            await Cache.SetAsync(trashKey, trashData, SlidingOneMinute);
+        }
+
+        foreach (var trashKey in trashKeys)
+        {
+            var trash = await Cache.GetAsync(trashKey);
+            Assert.NotNull(trash);
+        }
+
+        await Cache.SetAsync(key, original, SlidingOneMinute);
+
+        var retrieved = await Cache.GetAsync(key);
+        Assert.NotNull(retrieved);
+        Assert.Equal(original, retrieved);
+
+        for (int i = 0; i < 5; i++)
+        {
+            fixture.AddTime(TimeSpan.FromMinutes(0.8));
+            retrieved = await Cache.GetAsync(key);
+            Assert.NotNull(retrieved);
+            Assert.Equal(original, retrieved);
+        }
+
+        for (int i = 0; i < 3; i++)
+        {
+            fixture.AddTime(TimeSpan.FromMinutes(0.8));
+            await Cache.RefreshAsync(key);
+        }
+        fixture.AddTime(TimeSpan.FromMinutes(0.8));
+        retrieved = await Cache.GetAsync(key);
+        Assert.NotNull(retrieved);
+        Assert.Equal(original, retrieved);
+
+        fixture.AddTime(TimeSpan.FromMinutes(1.2));
+        retrieved = await Cache.GetAsync(key);
+        Assert.Null(retrieved);
+        foreach (var trashKey in trashKeys)
+        {
+            retrieved = await Cache.GetAsync(trashKey);
+            Assert.NotNull(retrieved);
+        }
+    }
 }
