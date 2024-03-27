@@ -181,12 +181,23 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         public FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty> ReadResult;
         public ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> PendingUpsertResult;
         public FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty> UpsertResult;
+
+        internal void EnsureKeyLeased(ReadOnlySpan<byte> key)
+        {
+            KeyLength = key.Length;
+            if (KeyLease.Length == 0) // not yet leased
+            {
+                KeyLease = ArrayPool<byte>.Shared.Rent(KeyLength);
+                key.CopyTo(KeyLease);
+            }
+        }
     }
 
     private unsafe ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
     {
         var state = new GetAsyncState<TResult>();
-        state.KeyLength = WriteKey(key, out state.KeyLease);
+        state.KeyLength = 0;
+        state.KeyLease = [];
         state.Input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
         state.Selector = selector;
         state.Token = token;
@@ -196,20 +207,22 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         state.UpsertResult = default;
         state.PendingReadResult = IncorrectReadState;
         state.PendingUpsertResult = IncorrectUpsertState;
-        return GetAsyncImpl(ref state);
+        return GetAsyncImpl(key, ref state);
     }
 
-    private unsafe ValueTask<TResult?> GetAsyncImpl<TResult>(ref GetAsyncState<TResult> state)
+    private unsafe ValueTask<TResult?> GetAsyncImpl<TResult>(string key, ref GetAsyncState<TResult> state)
     {
         try
         {
-            fixed (byte* keyPtr = state.KeyLease)
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out state.KeyLease);
+            fixed (byte* keyPtr = keySpan)
             {
-                var fixedKey = SpanByte.FromPointer(keyPtr, state.KeyLength);
+                var fixedKey = SpanByte.FromFixedSpan(keySpan);
 
                 state.PendingReadResult = state.Session.ReadAsync(fixedKey, state.Input, token: state.Token);
                 if (!state.PendingReadResult.IsCompletedSuccessfully)
                 {
+                    state.EnsureKeyLeased(keySpan); // we'll need the key for upsert
                     return AsyncTransitionGet(ref state, 0);
                 }
                 state.ReadResult = state.PendingReadResult.GetAwaiter().GetResult();
@@ -219,6 +232,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var output = state.ReadResult.Output;
                 if (status.IsPending)
                 {
+                    state.EnsureKeyLeased(keySpan); // we'll need the key for upsert
                     return AsyncTransitionGet(ref state, 1);
                 }
 
@@ -260,7 +274,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     const int MAX_STACKALLOC = 128;
     private unsafe byte[]? Get(string key, bool getPayload)
     {
-        var keySpan = WriteKey(key.Length <= MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
 
         byte[]? finalResult = null;
         var session = GetSession();
@@ -310,7 +324,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     unsafe void IDistributedCache.Remove(string key)
     {
-        var keySpan = WriteKey(key.Length <= MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
 
         var session = GetSession();
         try
@@ -393,7 +407,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     unsafe void IDistributedCache.Set(string key, byte[] value, DistributedCacheEntryOptions options)
     {
-        var keySpan = WriteKey(key.Length <= MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var keyLease);
+        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var keyLease);
         var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default,
             value, out var valueLease, options);
 

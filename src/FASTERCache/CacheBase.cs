@@ -42,7 +42,7 @@ internal abstract class CacheBase : IDisposable
     {
         if (length > target.Length)
         {
-            var arr = ArrayPool<byte>.Shared.Rent(length); ;
+            var arr = ArrayPool<byte>.Shared.Rent(length);
             target = new(arr, 0, length);
             return arr;
         }
