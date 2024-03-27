@@ -4,6 +4,7 @@ using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -243,17 +244,17 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         var original = Guid.NewGuid().ToByteArray();
         // memory size is PageSizeBits+2
         //init with trash
-        byte[] trashData = new byte[1 << (PageSizeBits - 1)]; // try different sizes, -1 fails, -10 works
+        byte[] trashData = new byte[1 << (PageSizeBits - 2)]; // try different sizes, -2 fails, -3 works, it's about the in-memory boundary (16kb)
         Random.Shared.NextBytes(trashData);
         List<string> trashKeys = new();
         for (int i = 0; i < 16; i++)
         {
             var trashKey = Guid.NewGuid().ToString("N");
             trashKeys.Add(trashKey);
-            await Cache.SetAsync(trashKey, trashData, SlidingOneMinute);
+            await Cache.SetAsync(trashKey, trashData, RelativeNever);
         }
 
-        foreach (var trashKey in trashKeys)
+        foreach (var trashKey in Enumerable.Reverse(trashKeys))
         {
             var trash = await Cache.GetAsync(trashKey);
             Assert.NotNull(trash);
