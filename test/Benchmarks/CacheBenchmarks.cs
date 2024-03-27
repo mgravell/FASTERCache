@@ -77,6 +77,11 @@ public class CacheBenchmarks : IDisposable
     }
 
     private int Get(IDistributedCache cache) => Assert(cache.Get(key));
+    private int GetNew(IExperimentalBufferCache cache)
+    {
+        using var bw = new CountingBufferWriter();
+        return Assert(cache.Get(key, bw) ? bw.Count : -1);
+    }
     private async ValueTask<int> GetAsync(IDistributedCache cache) => Assert(await cache.GetAsync(key));
 
     class CountingBufferWriter : IBufferWriter<byte>, IDisposable
@@ -94,7 +99,7 @@ public class CacheBenchmarks : IDisposable
 
         public Span<byte> GetSpan(int sizeHint = 0) => _buffer;
     }
-    private async ValueTask<int> GetAsync(IExperimentalBufferCache cache)
+    private async ValueTask<int> GetAsyncNew(IExperimentalBufferCache cache)
     {
         using var bw = new CountingBufferWriter();
         return Assert(await cache.GetAsync(key, bw) ? bw.Count : -1);
@@ -122,6 +127,15 @@ public class CacheBenchmarks : IDisposable
         payload[payload.Length / 2]++;
         cache.Set(key, payload, Expiry);
     }
+
+    private void SetNew(IExperimentalBufferCache cache)
+    {
+        // scramble slightly each time
+        payload[payload.Length / 2]++;
+        ReadOnlySequence<byte> ros = new(payload);
+        cache.Set(key, ros, Expiry);
+    }
+
     private async Task SetAsync(IDistributedCache cache)
     {
         // scramble slightly each time
@@ -140,15 +154,21 @@ public class CacheBenchmarks : IDisposable
     }
 
     [Benchmark]
-    public int? FASTER_Get() => Get(_faster);
+    public int FASTER_Get() => Get(_faster);
     
     [Benchmark]
     public void FASTER_Set() => Set(_faster);
 
     [Benchmark]
+    public int FASTER_GetBuffer() => GetNew(_fasterBuffer);
+
+    [Benchmark]
+    public void FASTER_SetBuffer() => SetNew(_fasterBuffer);
+
+    [Benchmark]
     public ValueTask<int> FASTER_GetAsync() => GetAsync(_faster);
     [Benchmark]
-    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsync(_fasterBuffer);
+    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsyncNew(_fasterBuffer);
 
     [Benchmark]
     public Task FASTER_SetAsync() => SetAsync(_faster);
@@ -156,7 +176,7 @@ public class CacheBenchmarks : IDisposable
     public Task FASTER_SetAsyncBuffer() => SetAsyncNew(_fasterBuffer);
 
     [Benchmark]
-    public int? SQLite_Get() => Get(_sqlite);
+    public int SQLite_Get() => Get(_sqlite);
 
     [Benchmark]
     public void SQLite_Set() => Set(_sqlite);
@@ -169,7 +189,7 @@ public class CacheBenchmarks : IDisposable
 
 #if NET8_0_OR_GREATER
     [Benchmark]
-    public int? Rocks_Get() => Get(_rocks);
+    public int Rocks_Get() => Get(_rocks);
 
     [Benchmark]
     public void Rocks_Set() => Set(_rocks);

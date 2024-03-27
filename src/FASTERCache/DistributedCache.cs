@@ -7,6 +7,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,7 +16,7 @@ namespace FASTERCache;
 /// <summary>
 /// Implements IDistributedCache
 /// </summary>
-internal sealed partial class DistributedCache : CacheBase<DistributedCache.Input, DistributedCache.Output, Empty, DistributedCache.CacheFunctions>,  IDistributedCache, IDisposable, IExperimentalBufferCache
+internal sealed partial class DistributedCache : CacheBase<DistributedCache.Input, DistributedCache.Output, Empty, DistributedCache.CacheFunctions>, IDistributedCache, IDisposable, IExperimentalBufferCache
 {
     protected override byte KeyPrefix => (byte)'D';
 
@@ -63,10 +64,10 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     const int MAX_STACKALLOC_SIZE = 128;
 
-    ReadOnlySpan<byte> WriteValue(Span<byte> target, byte[] value, out byte[] lease, DistributedCacheEntryOptions? options)
+    ReadOnlySpan<byte> WriteValue(Span<byte> target, ReadOnlySequence<byte> value, out byte[] lease, DistributedCacheEntryOptions? options)
     {
         var absoluteExpiration = GetExpiryTicks(options, out var slidingExpiration);
-        lease = EnsureSize(ref target, value.Length + 12);
+        lease = EnsureSize(ref target, checked((int)value.Length + 12));
         BinaryPrimitives.WriteInt64LittleEndian(target.Slice(0, 8), absoluteExpiration);
         BinaryPrimitives.WriteInt32LittleEndian(target.Slice(8, 4), slidingExpiration);
         value.CopyTo(target.Slice(12));
@@ -84,64 +85,198 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         return new(lease, 0, length);
     }
 
-    private async Task<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, CancellationToken token, Func<Output, TResult> selector)
-    {
-        var keyMemory = WriteKey(key, out var lease);
 
-        var session = GetSession();
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ValueTask<TResult?> AsyncTransitionGet<TResult>(ref GetAsyncState<TResult> state, int step)
+    {
+        return AsyncTransitionGetImpl(this, state, step);
+
+        static async ValueTask<TResult?> AsyncTransitionGetImpl(
+        DistributedCache @this, GetAsyncState<TResult> state, int step)
+        {
+            try
+            {
+                Output output;
+                Status status;
+                switch (step)
+                {
+                    case 0: goto CompletePendingRead;
+                    case 1: goto CompleteIncompleteRead;
+                    case 2: goto CompletePendingUpsert;
+                    case 3: goto CompleteIncompleteUpsert;
+                    default: throw new ArgumentOutOfRangeException(nameof(step));
+                }
+            CompletePendingRead:
+                state.ReadResult = await state.PendingReadResult;
+                state.PendingReadResult = IncorrectReadState;
+                status = state.ReadResult.Status;
+                output = state.ReadResult.Output;
+                if (!status.IsPending) goto ReadIsComplete;
+                CompleteIncompleteRead:
+                await state.Session.CompletePendingAsync(token: state.Token);
+                (status, output) = state.ReadResult.Complete();
+            ReadIsComplete:
+                if (!(status.IsCompletedSuccessfully && status.Found))
+                    goto AfterSlide;
+
+                state.FinalResult = state.Selector(output);
+                Debug.WriteLine($"Read: {status}");
+
+                if (!@this.Slide(output, ref state.Input))
+                    goto AfterSlide;
+
+                unsafe
+                {
+                    fixed (byte* keyPtr = state.KeyLease)
+                    {
+                        // https://github.com/microsoft/FASTER/issues/444#issuecomment-809737698
+                        // "Data only needs to be fixed until the operation comes back from the initial call. When an operation goes
+                        // pending, we copy the data to an internal buffer before returning control to you, so you no longer need it fixed."
+                        var fixedKey = SpanByte.FromPointer(keyPtr, state.KeyLength);
+                        state.PendingUpsertResult = state.Session.UpsertAsync(fixedKey, state.Input, default, token: state.Token);
+                    }
+                }
+
+            CompletePendingUpsert:
+                state.UpsertResult = await state.PendingUpsertResult;
+                state.PendingUpsertResult = IncorrectUpsertState;
+                status = state.UpsertResult.Status;
+                if (!status.IsPending) goto UpsertIsComplete;
+                CompleteIncompleteUpsert:
+                await state.Session.CompletePendingAsync(token: state.Token);
+                status = state.UpsertResult.Complete();
+            UpsertIsComplete:
+                Debug.WriteLine($"Upsert (slide): {status}");
+            AfterSlide:
+                ReturnLease(state.KeyLease); // doesn't matter that still pinned
+                @this.ReuseSession(state.Session);
+                return state.FinalResult;
+            }
+            catch
+            {
+                FaultSession(state.Session);
+                throw;
+            }
+        }
+    }
+
+    static readonly ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> IncorrectReadState
+        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect read state"));
+
+    static readonly ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> IncorrectUpsertState
+        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect upsert state"));
+
+    static bool Force() => true;
+
+    private struct GetAsyncState<TResult> // this exists mainly so we can have a cheap call-stack for AsyncTransitionPendingRead etc
+    {
+        public int KeyLength;
+        public byte[] KeyLease;
+        public Input Input;
+        public Func<Output, TResult> Selector;
+        public CancellationToken Token;
+        public ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> Session;
+        public TResult? FinalResult;
+        public ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> PendingReadResult;
+        public FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty> ReadResult;
+        public ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> PendingUpsertResult;
+        public FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty> UpsertResult;
+
+        internal void EnsureKeyLeased(ReadOnlySpan<byte> key)
+        {
+            KeyLength = key.Length;
+            if (KeyLease.Length == 0) // not yet leased
+            {
+                KeyLease = ArrayPool<byte>.Shared.Rent(KeyLength);
+                key.CopyTo(KeyLease);
+            }
+        }
+    }
+
+    private unsafe ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
+    {
+        var state = new GetAsyncState<TResult>();
+        state.KeyLength = 0;
+        state.KeyLease = [];
+        state.Input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
+        state.Selector = selector;
+        state.Token = token;
+        state.Session = GetSession();
+        state.FinalResult = default;
+        state.ReadResult = default;
+        state.UpsertResult = default;
+        state.PendingReadResult = IncorrectReadState;
+        state.PendingUpsertResult = IncorrectUpsertState;
+        return GetAsyncImpl(key, ref state);
+    }
+
+    private unsafe ValueTask<TResult?> GetAsyncImpl<TResult>(string key, ref GetAsyncState<TResult> state)
+    {
         try
         {
-            TResult? finalResult = default;
-            using (keyMemory.Pin())
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out state.KeyLease);
+            fixed (byte* keyPtr = keySpan)
             {
-                var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
+                var fixedKey = SpanByte.FromFixedSpan(keySpan);
 
-                var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
+                state.PendingReadResult = state.Session.ReadAsync(fixedKey, state.Input, token: state.Token);
+                if (!state.PendingReadResult.IsCompletedSuccessfully)
+                {
+                    state.EnsureKeyLeased(keySpan); // we'll need the key for upsert
+                    return AsyncTransitionGet(ref state, 0);
+                }
+                state.ReadResult = state.PendingReadResult.GetAwaiter().GetResult();
+                state.PendingReadResult = IncorrectReadState;
 
-                var readResult = await session.ReadAsync(fixedKey, input, token: token);
-                var status = readResult.Status;
-                var output = readResult.Output;
+                var status = state.ReadResult.Status;
+                var output = state.ReadResult.Output;
                 if (status.IsPending)
                 {
-                    await session.CompletePendingAsync(token: token);
-                    (status, output) = readResult.Complete();
+                    state.EnsureKeyLeased(keySpan); // we'll need the key for upsert
+                    return AsyncTransitionGet(ref state, 1);
                 }
 
                 if (status.IsCompletedSuccessfully && status.Found)
                 {
-                    finalResult = selector(output);
+                    state.FinalResult = state.Selector(output);
                     Debug.WriteLine($"Read: {status}");
 
-                    if (Slide(output, ref input))
+                    if (Slide(output, ref state.Input))
                     {
-                        var upsertResult = await session.BasicContext.UpsertAsync(fixedKey, input, default, token: token);
-                        status = upsertResult.Status;
+                        state.PendingUpsertResult = state.Session.UpsertAsync(fixedKey, state.Input, default, token: state.Token);
+                        if (!state.PendingUpsertResult.IsCompletedSuccessfully)
+                        {
+                            return AsyncTransitionGet(ref state, 2);
+                        }
+                        state.UpsertResult = state.PendingUpsertResult.GetAwaiter().GetResult();
+                        state.PendingUpsertResult = IncorrectUpsertState;
+
+                        status = state.UpsertResult.Status;
                         if (status.IsPending)
                         {
-                            await session.CompletePendingAsync(token: token);
-                            status = upsertResult.Complete();
+                            return AsyncTransitionGet(ref state, 3);
                         }
                         Debug.WriteLine($"Upsert (slide): {status}");
                     }
                 }
             }
-            ReturnLease(lease);
-            ReuseSession(session);
-            return finalResult;
+            ReturnLease(state.KeyLease);
+            ReuseSession(state.Session);
+            return new(state.FinalResult);
         }
         catch
         {
-            FaultSession(session);
+            FaultSession(state.Session);
             throw;
         }
     }
 
     const int MAX_STACKALLOC = 128;
-    private unsafe byte[]? Get(string key, bool getPayload)
+    private unsafe TResult? Get<TResult>(string key, bool readArray, Func<Output, TResult> selector, IBufferWriter<byte>? bufferWriter = null)
     {
-        var keySpan = WriteKey(key.Length <= MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
 
-        byte[]? finalResult = null;
+        TResult? finalResult = default;
         var session = GetSession();
         try
         {
@@ -150,21 +285,17 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
 
-                var input = new Input(getPayload ? Input.OperationFlags.ReadArray : Input.OperationFlags.None);
+                var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
                 Output output = default;
                 var status = session.Read(ref fixedKey, ref input, ref output);
                 Debug.WriteLine($"Read: {status}");
-                finalResult = output.Payload;
+                finalResult = selector(output);
 
                 if (Slide(in output, ref input))
                 {
                     SpanByte payload = default;
                     var upsert = session.BasicContext.Upsert(ref fixedKey, ref input, ref payload, ref output);
                     Debug.WriteLine($"Upsert (slide): {upsert}");
-                }
-                if (finalResult is not null)
-                {
-                    Debug.WriteLine("Read payload: " + BitConverter.ToString(finalResult));
                 }
                 session.CompletePending(true);
             }
@@ -179,17 +310,17 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
     }
 
-    byte[]? IDistributedCache.Get(string key) => Get(key, getPayload: true);
+    byte[]? IDistributedCache.Get(string key) => Get(key, readArray: true, selector: x => x.Payload);
 
-    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: true, token: token, static x => x.Payload);
+    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: true, selector: static x => x.Payload, token: token).AsTask();
 
-    unsafe void IDistributedCache.Refresh(string key) => Get(key, getPayload: false);
+    unsafe void IDistributedCache.Refresh(string key) => Get(key, readArray: false, selector: x => true);
 
-    Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: false, token: token, static _ => true);
+    Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: false, selector: static _ => true, token: token).AsTask();
 
     unsafe void IDistributedCache.Remove(string key)
     {
-        var keySpan = WriteKey(key.Length <= MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
 
         var session = GetSession();
         try
@@ -213,8 +344,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     async Task IDistributedCache.RemoveAsync(string key, CancellationToken token)
     {
-        var keyMemory = WriteKey(key, out var lease);
-
+        var keyLength = WriteKey(key, out var lease);
+        var keyMemory = new Memory<byte>(lease, 0, keyLength);
         var session = GetSession();
         try
         {
@@ -271,8 +402,11 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     private static readonly long OneMinuteTicks = TimeSpan.FromMinutes(1).Ticks;
 
     unsafe void IDistributedCache.Set(string key, byte[] value, DistributedCacheEntryOptions options)
+        => Write(key, new(value), options);
+
+    unsafe void Write(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
     {
-        var keySpan = WriteKey(key.Length <= MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var keyLease);
+        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var keyLease);
         var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default,
             value, out var valueLease, options);
 
@@ -301,11 +435,13 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
     Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
-        => WriteAsync(key, new(value), options, token);
+        => WriteAsync(key, new(value), options, token).AsTask();
 
-    async Task WriteAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
+
+    async ValueTask WriteAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
     {
-        var keyMemory = WriteKey(key, out var keyLease);
+        var keyLength = WriteKey(key, out var keyLease);
+        var keyMemory = new Memory<byte>(keyLease, 0, keyLength);
         var valueMemory = WriteValue(value, out var valueLease, options);
 
         var session = GetSession();
@@ -337,9 +473,15 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
     }
 
-    Task<bool> IExperimentalBufferCache.GetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
-        => GetAsync(key, bufferWriter: target, readArray: false, token: token, selector: static x => true);
+    ValueTask<bool> IExperimentalBufferCache.GetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
+        => GetAsync(key, bufferWriter: target, readArray: false, token: token, selector: static _ => true);
 
-    Task IExperimentalBufferCache.SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
+    ValueTask IExperimentalBufferCache.SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
         => WriteAsync(key, value, options, token);
+
+    bool IExperimentalBufferCache.Get(string key, IBufferWriter<byte> target)
+        => Get(key, bufferWriter: target, readArray: false, selector: static _ => true);
+
+    void IExperimentalBufferCache.Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
+        => Write(key, value, options);
 }

@@ -42,7 +42,7 @@ internal abstract class CacheBase : IDisposable
     {
         if (length > target.Length)
         {
-            var arr = ArrayPool<byte>.Shared.Rent(length); ;
+            var arr = ArrayPool<byte>.Shared.Rent(length);
             target = new(arr, 0, length);
             return arr;
         }
@@ -59,14 +59,14 @@ internal abstract class CacheBase : IDisposable
         return target;
     }
 
-    protected Memory<byte> WriteKey(string key, out byte[] lease)
+    protected int WriteKey(string key, out byte[] lease)
     {
         var length = Encoding.GetByteCount(key) + 1;
         lease = ArrayPool<byte>.Shared.Rent(length);
         lease[0] = KeyPrefix;
         var actualLength = Encoding.GetBytes(key, 0, key.Length, lease, 1);
         Debug.Assert(length == actualLength + 1);
-        return new(lease, 0, length);
+        return length;
     }
 
 }
@@ -78,7 +78,7 @@ internal abstract class CacheBase<TInput, TOutput, TContext, TFunctions> : Cache
     protected readonly CacheService Cache;
     protected readonly TFunctions Functions;
 
-    private readonly ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, TContext, TFunctions>> _clientSessions = new();
+    private readonly ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, TContext, TFunctions>> _clientSessions = [];
 
     public CacheBase(CacheService cacheService, TFunctions functions)
     {
