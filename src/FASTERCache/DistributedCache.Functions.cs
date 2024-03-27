@@ -67,10 +67,15 @@ partial class DistributedCache
             // else no change
             return true;
         }
-        public override bool NeedInitialUpdate(ref SpanByte key, ref Input input, ref Output output, ref RMWInfo rmwInfo) => false;
-        public override bool NeedCopyUpdate(ref SpanByte key, ref Input input, ref SpanByte oldValue, ref Output output, ref RMWInfo rmwInfo) => false;
-        public override bool InitialUpdater(ref SpanByte key, ref Input input, ref SpanByte value, ref Output output, ref RMWInfo rmwInfo) => false;
-        public override bool CopyUpdater(ref SpanByte key, ref Input input, ref SpanByte oldValue, ref SpanByte newValue, ref Output output, ref RMWInfo rmwInfo) => false;
+
+        public override bool NeedInitialUpdate(ref SpanByte key, ref Input input, ref Output output, ref RMWInfo rmwInfo)
+            => false;
+        public override bool NeedCopyUpdate(ref SpanByte key, ref Input input, ref SpanByte oldValue, ref Output output, ref RMWInfo rmwInfo)
+            => true;
+        public override bool InitialUpdater(ref SpanByte key, ref Input input, ref SpanByte value, ref Output output, ref RMWInfo rmwInfo)
+            => true;
+        public override bool CopyUpdater(ref SpanByte key, ref Input input, ref SpanByte oldValue, ref SpanByte newValue, ref Output output, ref RMWInfo rmwInfo)
+            => Copy(ref oldValue, ref newValue) && InPlaceUpdater(ref key, ref input, ref newValue, ref output, ref rmwInfo);
 
 
 #if NET8_0_OR_GREATER
