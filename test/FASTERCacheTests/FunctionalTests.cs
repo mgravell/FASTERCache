@@ -256,7 +256,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
 
         foreach (var trashKey in Enumerable.Reverse(trashKeys))
         {
-            var trash = await Cache.GetAsync(trashKey);
+            var trash = await Cache.GetAsync(trashKey); // for -2 the 8th one fails, which is memorysize/2, which is the size after which faster pushes to disk
             Assert.NotNull(trash);
         }
 
