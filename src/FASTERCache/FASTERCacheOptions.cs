@@ -17,7 +17,6 @@ public sealed class FASTERCacheOptions
 
     public bool DeleteOnClose { get; set; } = false;
     public long LogCapacity { get; set; } = -1;
-    public long ObjectLogCapacity { get; set; } = -1;
 
     internal class Validator : IValidateOptions<FASTERCacheOptions>
     {
