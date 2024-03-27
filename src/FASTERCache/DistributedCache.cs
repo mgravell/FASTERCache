@@ -112,8 +112,12 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 status = state.ReadResult.Status;
                 output = state.ReadResult.Output;
                 if (!status.IsPending) goto ReadIsComplete;
-                CompleteIncompleteRead:
-                await state.Session.CompletePendingAsync(token: state.Token);
+            CompleteIncompleteRead:
+                // WHY NO CompletePendingAsync <== (from search? this one)
+                // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
+                // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
+                // tl;dr: we should not need CompletePendingAsync
+                // await state.Session.CompletePendingAsync(token: state.Token);
                 (status, output) = state.ReadResult.Complete();
             ReadIsComplete:
                 if (!(status.IsCompletedSuccessfully && status.Found))
@@ -142,8 +146,9 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 state.PendingUpsertResult = IncorrectUpsertState;
                 status = state.UpsertResult.Status;
                 if (!status.IsPending) goto UpsertIsComplete;
-                CompleteIncompleteUpsert:
-                await state.Session.CompletePendingAsync(token: state.Token);
+            CompleteIncompleteUpsert:
+                // search: WHY NO CompletePendingAsync
+                // await state.Session.CompletePendingAsync(token: state.Token);
                 status = state.UpsertResult.Complete();
             UpsertIsComplete:
                 Debug.WriteLine($"Upsert (slide): {status}");
@@ -272,6 +277,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
     const int MAX_STACKALLOC = 128;
+
     private unsafe TResult? Get<TResult>(string key, bool readArray, Func<Output, TResult> selector, IBufferWriter<byte>? bufferWriter = null)
     {
         var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
@@ -288,16 +294,17 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
                 Output output = default;
                 var status = session.Read(ref fixedKey, ref input, ref output);
+                if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
                 Debug.WriteLine($"Read: {status}");
                 finalResult = selector(output);
 
                 if (Slide(in output, ref input))
                 {
                     SpanByte payload = default;
-                    var upsert = session.BasicContext.Upsert(ref fixedKey, ref input, ref payload, ref output);
+                    var upsert = session.Upsert(ref fixedKey, ref input, ref payload, ref output);
+                    if (upsert.IsPending) CompleteSinglePending(session, ref status, ref output);
                     Debug.WriteLine($"Upsert (slide): {upsert}");
                 }
-                session.CompletePending(true);
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -328,9 +335,14 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             fixed (byte* ptr = keySpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                var result = session.Delete(ref fixedKey);
-                Debug.WriteLine($"Delete: {result}");
-                session.CompletePending(true);
+                var status = session.Delete(ref fixedKey);
+                if (status.IsPending)
+                {
+                    Output dummy;
+                    Unsafe.SkipInit(out dummy);
+                    CompleteSinglePending(session, ref status, ref dummy);
+                }
+                Debug.WriteLine($"Delete: {status}");
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -356,7 +368,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var status = result.Status;
                 if (status.IsPending)
                 {
-                    await session.CompletePendingAsync(token: token);
+                    // search: WHY NO CompletePendingAsync
+                    // await session.CompletePendingAsync(token: token);
                     status = result.Complete();
                 }
                 Debug.WriteLine($"Delete: {status}");
@@ -419,9 +432,14 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
                 var fixedValue = SpanByte.FromFixedSpan(valueSpan);
-                var result = session.Upsert(ref fixedKey, ref fixedValue);
-                Debug.WriteLine($"Upsert: {result}");
-                session.CompletePending(true);
+                var status = session.Upsert(ref fixedKey, ref fixedValue);
+                if (status.IsPending)
+                {
+                    Output dummy;
+                    Unsafe.SkipInit(out dummy);
+                    CompleteSinglePending(session, ref status, ref dummy);
+                }
+                Debug.WriteLine($"Upsert: {status}");
             }
             ReturnLease(keyLease);
             ReturnLease(valueLease);
@@ -457,7 +475,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var status = upsertResult.Status;
                 if (status.IsPending)
                 {
-                    await session.CompletePendingAsync(token: token);
+                    // search: WHY NO CompletePendingAsync
+                    // await session.CompletePendingAsync(token: token);
                     status = upsertResult.Complete();
                 }
                 Debug.WriteLine($"Upsert: {status}");

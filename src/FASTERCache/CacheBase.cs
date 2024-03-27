@@ -3,6 +3,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 
@@ -85,6 +86,21 @@ internal abstract class CacheBase<TInput, TOutput, TContext, TFunctions> : Cache
         Functions = functions;
         Cache = cacheService;
         Cache.AddRef();
+    }
+
+    protected static void CompleteSinglePending(ClientSession<SpanByte, SpanByte, TInput, TOutput, TContext, TFunctions> session, ref Status status, ref TOutput output)
+    {
+        if (!session.CompletePendingWithOutputs(out var outputs, wait: true)) Throw();
+        int count = 0;
+        while (outputs.Next())
+        {
+            ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, TContext> current = ref outputs.Current;
+            status = current.Status;
+            output = current.Output;
+        }
+        if (count != 1) Throw();
+
+        static void Throw() => throw new InvalidOperationException("Exactly one pending operation was expected");
     }
 
 
