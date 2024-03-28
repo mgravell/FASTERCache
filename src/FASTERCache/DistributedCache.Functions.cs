@@ -3,6 +3,7 @@ using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using static FASTERCache.DistributedCache;
 
 namespace FASTERCache;
 
@@ -26,10 +27,29 @@ partial class DistributedCache
         public abstract long NowTicks { get; }
 
         public override bool ConcurrentReader(ref SpanByte key, ref Input input, ref SpanByte value, ref Output dst, ref ReadInfo readInfo)
-            => false; // read is done in RMW, for slide
+        {
+            var span = value.AsSpan();
+
+            // check for expiration
+            var absolute = BinaryPrimitives.ReadInt64LittleEndian(span);
+            var now = NowTicks;
+            if (absolute <= now)
+            {
+                readInfo.Action = ReadAction.Expire;
+                return false;
+            }
+            var sliding = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(8));
+
+            // copy data out to the query, if needed
+            if (input.ReadToWriter) input.Writer.Write(span.Slice(12));
+            byte[] payload = input.ReadToArray ? span.Slice(12).ToArray() : [];
+            dst = new(absolute, sliding, payload);
+
+            return true;
+        }
 
         public override bool SingleReader(ref SpanByte key, ref Input input, ref SpanByte value, ref Output dst, ref ReadInfo readInfo)
-            => false; // read is done in RMW, for slide
+            => ConcurrentReader(ref key, ref input, ref value, ref dst, ref readInfo);
 
         public override bool Write(ref Input input, ref SpanByte src, ref SpanByte dst, ref UpsertInfo upsertInfo)
             => Copy(ref src, ref dst);

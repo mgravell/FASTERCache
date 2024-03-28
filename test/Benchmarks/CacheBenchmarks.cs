@@ -24,6 +24,9 @@ public class CacheBenchmarks : IDisposable
     private readonly IDistributedCache _rocks;
 #endif
 
+    [Params(true, false)]
+    public bool Sliding { get; set; } = true;
+
     [Params(128)]
     public int KeyLength { get; set; } = 20;
 
@@ -54,6 +57,10 @@ public class CacheBenchmarks : IDisposable
 #if NET8_0_OR_GREATER
         _rocks.Set(key, finalArr);
 #endif
+        if (_faster is DistributedCache dc)
+        {
+            dc.SlidingExpiration = Sliding;
+        }
     }
     public CacheBenchmarks()
     {

@@ -5,7 +5,6 @@ using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -18,6 +17,11 @@ namespace FASTERCache;
 /// </summary>
 internal sealed partial class DistributedCache : CacheBase<DistributedCache.Input, DistributedCache.Output, Empty, DistributedCache.CacheFunctions>, IDistributedCache, IDisposable, IExperimentalBufferCache
 {
+    public bool SlidingExpiration
+    {
+        get => Cache.SlidingExpiration;
+        set => Cache.SlidingExpiration = value;
+    }
     protected override byte KeyPrefix => (byte)'D';
 
     // heavily influenced by https://github.com/microsoft/FASTER/blob/main/cs/samples/CacheStore/
@@ -87,6 +91,10 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     static bool Force() => true;
 
     private ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
+        => SlidingExpiration ? RMWAsync(key, bufferWriter, readArray, selector, token)
+        : ReadAsync(key, bufferWriter, readArray, selector, token);
+
+    private ValueTask<TResult?> RMWAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
     {
         var session = GetSession();
         try
@@ -170,6 +178,90 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
     }
 
+    private ValueTask<TResult?> ReadAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
+    {
+        var session = GetSession();
+        try
+        {
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+            ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> pendingReadResult;
+            unsafe
+            {
+                fixed (byte* keyPtr = keySpan)
+                {
+                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
+                    var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
+                    pendingReadResult = session.ReadAsync(fixedKey, input, token: token);
+                    DebugWipe(keySpan);
+                }
+            }
+            ReturnLease(ref lease);
+
+            if (!pendingReadResult.IsCompletedSuccessfully)
+            {
+                return Awaited(this, session, pendingReadResult, selector);
+            }
+            var rmwResult = pendingReadResult.GetAwaiter().GetResult();
+
+            var status = rmwResult.Status;
+            var output = rmwResult.Output;
+            if (status.IsPending)
+            {
+                // WHY NO CompletePendingAsync <== (from search? this one)
+                // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
+                // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
+                // tl;dr: we should not need CompletePendingAsync
+                // await state.Session.CompletePendingAsync(token: state.Token);
+                (status, output) = rmwResult.Complete();
+            }
+            Assert(status, nameof(session.ReadAsync));
+            OnDebugRMWComplete(status, async: false);
+            TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
+            ReuseSession(session);
+            return new(finalResult);
+        }
+        catch
+        {
+            OnDebugFault();
+            FaultSession(session);
+            throw;
+        }
+        static async ValueTask<TResult?> Awaited(DistributedCache @this,
+            ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
+            ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<Input, Output, Empty>> pendingRmwResult,
+            Func<Output, TResult> selector
+            )
+        {
+            try
+            {
+                var rmwResult = await pendingRmwResult;
+
+                var status = rmwResult.Status;
+                var output = rmwResult.Output;
+                if (status.IsPending)
+                {
+                    // WHY NO CompletePendingAsync <== (from search? this one)
+                    // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
+                    // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
+                    // tl;dr: we should not need CompletePendingAsync
+                    // await state.Session.CompletePendingAsync(token: state.Token);
+                    (status, output) = rmwResult.Complete();
+                }
+                Assert(status, nameof(session.ReadAsync));
+                @this.OnDebugRMWComplete(status, async: false);
+                TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
+                @this.ReuseSession(session);
+                return finalResult;
+            }
+            catch
+            {
+                @this.OnDebugFault();
+                FaultSession(session);
+                throw;
+            }
+        }
+    }
+
     const int MAX_STACKALLOC = 128;
 
     private unsafe TResult? Get<TResult>(string key, bool readArray, Func<Output, TResult> selector, IBufferWriter<byte>? bufferWriter = null)
@@ -182,17 +274,20 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         {
             Status status;
             Output output = default;
+            var sliding = SlidingExpiration;
             fixed (byte* keyPtr = keySpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
                 var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
-                status = session.RMW(ref fixedKey, ref input, ref output);
+                status = sliding
+                    ? session.RMW(ref fixedKey, ref input, ref output)
+                    : session.Read(ref fixedKey, ref input, ref output);
                 DebugWipe(keySpan);
             }
             ReturnLease(ref lease);
             if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
 
-            Assert(status, nameof(session.RMW));
+            Assert(status, sliding ? nameof(session.RMW) : nameof(session.Read));
             OnDebugRMWComplete(status, async: false);
             if (IsReadHit(status.Value))
             {

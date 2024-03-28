@@ -15,6 +15,8 @@ FASTERCache.FASTERCacheOptions.FASTERCacheOptions() -> void
 FASTERCache.FASTERCacheOptions.LogCapacity.get -> long
 FASTERCache.FASTERCacheOptions.LogCapacity.set -> void
 FASTERCache.FASTERCacheOptions.LogSettings.get -> FASTER.core.LogSettings!
+FASTERCache.FASTERCacheOptions.SlidingExpiration.get -> bool
+FASTERCache.FASTERCacheOptions.SlidingExpiration.set -> void
 Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions
 static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.AddFASTERCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FASTERCache.FASTERCacheOptions!>! setupAction) -> void
 static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.AddFASTERDistributedCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FASTERCache.FASTERCacheOptions!>? setupAction = null) -> void

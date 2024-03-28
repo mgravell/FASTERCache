@@ -76,9 +76,12 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 
     private static string Caller([CallerMemberName] string caller = "") => caller;
 
-    [Fact]
-    public void BasicUsage()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void BasicUsage(bool sliding)
     {
+        SetSliding(sliding);
         var key = Caller();
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
@@ -98,9 +101,12 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         WriteStats();
     }
 
-    [Fact]
-    public async Task BasicUsageAsync()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BasicUsageAsync(bool sliding)
     {
+        SetSliding(sliding);
         var key = Caller();
         var bw = new ArrayBufferWriter<byte>();
         Assert.Null(await Cache.GetAsync(key));
@@ -127,15 +133,26 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         WriteStats();
     }
 
+    private void SetSliding(bool sliding)
+    {
+        if (Cache is DistributedCache dc)
+        {
+            dc.SlidingExpiration = sliding;
+        }
+    }
+
     private static readonly DistributedCacheEntryOptions RelativeFiveMinutes = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) };
 
     private static readonly DistributedCacheEntryOptions RelativeNever = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(1000) };
 
     private static readonly DistributedCacheEntryOptions SlidingOneMinute = new() { SlidingExpiration = TimeSpan.FromMinutes(1) };
 
-    [Fact]
-    public void RelativeExpiration()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RelativeExpiration(bool sliding)
     {
+        SetSliding(sliding);
         var key = Caller();
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
@@ -156,9 +173,12 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         WriteStats();
     }
 
-    [Fact]
-    public async Task RelativeExpirationAsync()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RelativeExpirationAsync(bool sliding)
     {
+        SetSliding(sliding);
         var key = Caller();
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
@@ -182,6 +202,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     [Fact]
     public void SlidingExpiration()
     {
+        SetSliding(true);
         var key = Caller();
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
@@ -218,6 +239,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     [Fact]
     public async Task SlidingExpirationAsync()
     {
+        SetSliding(true);
         var key = Caller();
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
@@ -254,6 +276,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     [Fact]
     public async Task SlidingExpirationForcedAsync()
     {
+        SetSliding(true);
         var key = Caller();
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
