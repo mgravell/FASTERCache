@@ -7,10 +7,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using Xunit.Abstractions;
 
 namespace FASTERCache;
 
-public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixture<FunctionalTests.CacheInstance>
+public class FunctionalTests(FunctionalTests.CacheInstance fixture, ITestOutputHelper log) : IClassFixture<FunctionalTests.CacheInstance>
 {
     private IDistributedCache Cache => fixture.Cache;
     private IExperimentalBufferCache BufferCache => fixture.BufferCache;
@@ -86,6 +87,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
 
         Cache.Remove(key);
         Assert.Null(Cache.Get(key));
+        WriteStats();
     }
 
     [Fact]
@@ -114,6 +116,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
 
         await Cache.RemoveAsync(key);
         Assert.Null(await Cache.GetAsync(key));
+        WriteStats();
     }
 
     private static readonly DistributedCacheEntryOptions RelativeFiveMinutes = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) };
@@ -142,6 +145,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         fixture.AddTime(TimeSpan.FromMinutes(0.4));
         retrieved = Cache.Get(key);
         Assert.Null(retrieved);
+        WriteStats();
     }
 
     [Fact]
@@ -164,6 +168,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         fixture.AddTime(TimeSpan.FromMinutes(0.4));
         retrieved = await Cache.GetAsync(key);
         Assert.Null(retrieved);
+        WriteStats();
     }
 
     [Fact]
@@ -199,6 +204,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         fixture.AddTime(TimeSpan.FromMinutes(1.2));
         retrieved = Cache.Get(key);
         Assert.Null(retrieved);
+        WriteStats();
     }
 
     [Fact]
@@ -234,6 +240,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         fixture.AddTime(TimeSpan.FromMinutes(1.2));
         retrieved = await Cache.GetAsync(key);
         Assert.Null(retrieved);
+        WriteStats();
     }
 
     [Fact]
@@ -291,6 +298,19 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
         {
             retrieved = await Cache.GetAsync(trashKey);
             Assert.NotNull(retrieved);
+        }
+        WriteStats();
+    }
+
+    private void WriteStats()
+    {
+        if (Cache is DistributedCache dc)
+        {
+            log.WriteLine($"Hit: {dc.TotalHit}");
+            log.WriteLine($"Miss: {dc.TotalMiss} (of which {dc.TotalMissExpired} were expired)");
+            log.WriteLine($"Sync: {dc.TotalSync}");
+            log.WriteLine($"Async: {dc.TotalAsync}");
+            log.WriteLine($"Copy-Update: {dc.TotalCopyUpdate}");
         }
     }
 }

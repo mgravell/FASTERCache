@@ -70,6 +70,19 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         return new(lease, 0, length);
     }
 
+    // counters are optimized to be cheap to update; read is much rarer
+    public long TotalHit => Volatile.Read(ref _syncHit) + Volatile.Read(ref _asyncHit);
+    public long TotalMiss => Volatile.Read(ref _syncMissBasic) + Volatile.Read(ref _asyncMissBasic)
+        + Volatile.Read(ref _syncMissExpired) + Volatile.Read(ref _asyncMissExpired);
+
+    public long TotalSync => Volatile.Read(ref _syncHit) + Volatile.Read(ref _syncMissBasic) + Volatile.Read(ref _syncMissExpired);
+
+    public long TotalAsync => Volatile.Read(ref _asyncHit) + Volatile.Read(ref _asyncMissBasic) + Volatile.Read(ref _asyncMissExpired);
+    public long TotalCopyUpdate => Volatile.Read(ref _copyUpdate);
+    public long TotalMissExpired => Volatile.Read(ref _syncMissExpired) + Volatile.Read(ref _asyncMissExpired);
+
+    const byte StatusInPlaceUpdatedRecord = 0x20, StatusCopyUpdatedRecord = 0x30, // see Status.StatusCode internals
+        StatusRMWMask = StatusInPlaceUpdatedRecord | StatusCopyUpdatedRecord;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ValueTask<TResult?> AsyncTransitionGet<TResult>(ref GetAsyncState<TResult> state, int step)
@@ -91,7 +104,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 }
             CompletePendingRmw:
                 state.RmwResult = await state.PendingRmwResult;
-                state.PendingRmwResult = IncorrectRwmState;
+                state.ClearPendingRmwResult();
                 status = state.RmwResult.Status;
                 output = state.RmwResult.Output;
                 if (!status.IsPending) goto RmwIsComplete;
@@ -103,27 +116,40 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 // await state.Session.CompletePendingAsync(token: state.Token);
                 (status, output) = state.RmwResult.Complete();
             RmwIsComplete:
-                if (status.IsCompletedSuccessfully && status.Found)
-                {
-                    state.FinalResult = state.Selector(output);
-                }
                 Debug.WriteLine($"RMW: {status}");
+                if (status.IsCompletedSuccessfully) // TODO mask optimize all states
+                {
+                    if (status.Found && !status.Expired)
+                    {
+                        state.FinalResult = state.Selector(output);
+                        Interlocked.Increment(ref @this._asyncHit);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref status.Expired ? ref @this._asyncMissExpired : ref @this._asyncMissBasic);
+                    }
+                    if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
+                    {
+                        Interlocked.Increment(ref @this._copyUpdate);
+                    }
+                }
+                else
+                {
+                    Interlocked.Increment(ref @this._fault);
+                }
 
                 @this.ReuseSession(state.Session);
                 return state.FinalResult;
             }
             catch
             {
+                Interlocked.Increment(ref @this._fault);
                 FaultSession(state.Session);
                 throw;
             }
         }
     }
 
-    static readonly ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> IncorrectRwmState
-        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect RMW state"));
-
-    
     static bool Force() => true;
 
     private struct GetAsyncState<TResult> // this exists mainly so we can have a cheap call-stack for AsyncTransitionPendingRead etc
@@ -135,6 +161,20 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         public TResult? FinalResult;
         public ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> PendingRmwResult;
         public FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty> RmwResult;
+
+        public void ClearPendingRmwResult()
+        {
+#if DEBUG
+            PendingRmwResult = IncorrectRwmState; // deliberately force problems if we try to await incorrectly
+#else
+            PendingRmwResult = default;
+#endif
+        }
+#if DEBUG
+        private static readonly ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> IncorrectRwmState
+        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect RMW state"));
+#endif
+
     }
 
     private unsafe ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
@@ -146,7 +186,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         state.Session = GetSession();
         state.FinalResult = default;
         state.RmwResult = default;
-        state.PendingRmwResult = IncorrectRwmState;
+        state.PendingRmwResult = default;
+        state.ClearPendingRmwResult();
         return GetAsyncImpl(key, ref state);
     }
 
@@ -167,7 +208,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 return AsyncTransitionGet(ref state, 0);
             }
             state.RmwResult = state.PendingRmwResult.GetAwaiter().GetResult();
-            state.PendingRmwResult = IncorrectRwmState;
+            state.ClearPendingRmwResult();
 
             var status = state.RmwResult.Status;
             var output = state.RmwResult.Output;
@@ -175,22 +216,39 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             {
                 return AsyncTransitionGet(ref state, 1);
             }
-
-            if (status.IsCompletedSuccessfully && status.Found)
+            Debug.WriteLine($"RMW: {status}");
+            if (status.IsCompletedSuccessfully) // TODO mask optimize all states
             {
-                state.FinalResult = state.Selector(output);
-                Debug.WriteLine($"Read: {status}");
+                if (status.Found && !status.Expired)
+                {
+                    state.FinalResult = state.Selector(output);
+                    Interlocked.Increment(ref _syncHit);
+                }
+                else
+                {
+                    Interlocked.Increment(ref status.Expired ? ref _syncMissExpired : ref _asyncMissBasic);
+                }
+                if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
+                {
+                    Interlocked.Increment(ref _copyUpdate);
+                }
+            }
+            else
+            {
+                Interlocked.Increment(ref _fault);
             }
             ReuseSession(state.Session);
             return new(state.FinalResult);
         }
         catch
         {
+            Interlocked.Increment(ref _fault);
             FaultSession(state.Session);
             throw;
         }
     }
 
+    private long _syncHit, _syncMissBasic, _syncMissExpired, _asyncHit, _asyncMissBasic, _asyncMissExpired, _fault, _copyUpdate;
     const int MAX_STACKALLOC = 128;
 
     private unsafe TResult? Get<TResult>(string key, bool readArray, Func<Output, TResult> selector, IBufferWriter<byte>? bufferWriter = null)
