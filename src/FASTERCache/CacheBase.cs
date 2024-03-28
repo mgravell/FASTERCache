@@ -37,9 +37,16 @@ internal abstract class CacheBase : IDisposable
         catch { } // we already expect trouble; don't make it worse
     }
 
-    protected static void ReturnLease(byte[] lease) => ArrayPool<byte>.Shared.Return(lease);
+    protected static void ReturnLease(ref byte[]? lease)
+    {
+        if (lease is not null)
+        {
+            ArrayPool<byte>.Shared.Return(lease);
+            lease = null; // prevent double-return
+        }
+    }
 
-    protected static byte[] EnsureSize(ref Span<byte> target, int length)
+    protected static byte[]? EnsureSize(ref Span<byte> target, int length)
     {
         if (length > target.Length)
         {
@@ -48,9 +55,9 @@ internal abstract class CacheBase : IDisposable
             return arr;
         }
         target = target.Slice(0, length);
-        return [];
+        return null;
     }
-    protected ReadOnlySpan<byte> WriteKey(Span<byte> target, string key, out byte[] lease)
+    protected ReadOnlySpan<byte> WriteKey(Span<byte> target, string key, out byte[]? lease)
     {
         var length = Encoding.GetByteCount(key) + 1;
         lease = EnsureSize(ref target, length);
@@ -59,17 +66,6 @@ internal abstract class CacheBase : IDisposable
         Debug.Assert(length == actualLength + 1);
         return target;
     }
-
-    protected int WriteKey(string key, out byte[] lease)
-    {
-        var length = Encoding.GetByteCount(key) + 1;
-        lease = ArrayPool<byte>.Shared.Rent(length);
-        lease[0] = KeyPrefix;
-        var actualLength = Encoding.GetBytes(key, 0, key.Length, lease, 1);
-        Debug.Assert(length == actualLength + 1);
-        return length;
-    }
-
 }
 internal abstract class CacheBase<TInput, TOutput, TContext, TFunctions> : CacheBase
     where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, TContext>

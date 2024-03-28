@@ -14,7 +14,6 @@ partial class DistributedCache
 #if DEBUG
     partial void OnDebugReadComplete(Status status, bool async)
     {
-        Debug.WriteLine($"Read: {status}");
         if (status.IsCompletedSuccessfully)
         {
             if (status.Found && !status.Expired)
@@ -29,12 +28,15 @@ partial class DistributedCache
             {
                 Interlocked.Increment(ref status.Expired ? ref _syncMissExpired : ref _syncMissBasic);
             }
+
+            const byte StatusInPlaceUpdatedRecord = 0x20, StatusCopyUpdatedRecord = 0x30, // see Status.StatusCode internals
+                StatusRMWMask = StatusInPlaceUpdatedRecord | StatusCopyUpdatedRecord;
             if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
             {
                 Interlocked.Increment(ref _copyUpdate);
             }
         }
-        else
+        else if (status.IsFaulted)
         {
             Interlocked.Increment(ref _fault);
         }
@@ -65,8 +67,5 @@ partial class DistributedCache
     public long TotalAsync => Volatile.Read(ref _asyncHit) + Volatile.Read(ref _asyncMissBasic) + Volatile.Read(ref _asyncMissExpired);
     public long TotalCopyUpdate => Volatile.Read(ref _copyUpdate);
     public long TotalMissExpired => Volatile.Read(ref _syncMissExpired) + Volatile.Read(ref _asyncMissExpired);
-
-    const byte StatusInPlaceUpdatedRecord = 0x20, StatusCopyUpdatedRecord = 0x30, // see Status.StatusCode internals
-        StatusRMWMask = StatusInPlaceUpdatedRecord | StatusCopyUpdatedRecord;
 #endif
 }

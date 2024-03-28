@@ -49,7 +49,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     const int MAX_STACKALLOC_SIZE = 128;
 
-    ReadOnlySpan<byte> WriteValue(Span<byte> target, ReadOnlySequence<byte> value, out byte[] lease, DistributedCacheEntryOptions? options)
+    ReadOnlySpan<byte> WriteValue(Span<byte> target, ReadOnlySequence<byte> value, out byte[]? lease, DistributedCacheEntryOptions? options)
     {
         var absoluteExpiration = GetExpiryTicks(options, out var slidingExpiration);
         lease = EnsureSize(ref target, checked((int)value.Length + 12));
@@ -57,67 +57,6 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         BinaryPrimitives.WriteInt32LittleEndian(target.Slice(8, 4), slidingExpiration);
         value.CopyTo(target.Slice(12));
         return target;
-    }
-
-    Memory<byte> WriteValue(ReadOnlySequence<byte> value, out byte[] lease, DistributedCacheEntryOptions? options)
-    {
-        var absoluteExpiration = GetExpiryTicks(options, out var slidingExpiration);
-        var length = checked((int)value.Length + 12);
-        lease = ArrayPool<byte>.Shared.Rent(length);
-        BinaryPrimitives.WriteInt64LittleEndian(new(lease, 0, 8), absoluteExpiration);
-        BinaryPrimitives.WriteInt32LittleEndian(new(lease, 8, 4), slidingExpiration);
-        value.CopyTo(new(lease, 12, (int)value.Length));
-        return new(lease, 0, length);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private ValueTask<TResult?> AsyncTransitionGet<TResult>(ref GetAsyncState<TResult> state, int step)
-    {
-        return AsyncTransitionGetImpl(this, state, step);
-
-        static async ValueTask<TResult?> AsyncTransitionGetImpl(
-        DistributedCache @this, GetAsyncState<TResult> state, int step)
-        {
-            try
-            {
-                Output output;
-                Status status;
-                switch (step)
-                {
-                    case 0: goto CompletePendingRmw;
-                    case 1: goto CompleteIncompleteRmw;
-                    default: throw new ArgumentOutOfRangeException(nameof(step));
-                }
-            CompletePendingRmw:
-                state.RmwResult = await state.PendingRmwResult;
-                state.ClearPendingRmwResult();
-                status = state.RmwResult.Status;
-                output = state.RmwResult.Output;
-                if (!status.IsPending) goto RmwIsComplete;
-                CompleteIncompleteRmw:
-                // WHY NO CompletePendingAsync <== (from search? this one)
-                // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
-                // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
-                // tl;dr: we should not need CompletePendingAsync
-                // await state.Session.CompletePendingAsync(token: state.Token);
-                (status, output) = state.RmwResult.Complete();
-            RmwIsComplete:
-                @this.OnDebugReadComplete(status, async: true);
-                if (IsReadHit(status.Value))
-                {
-                    state.FinalResult = state.Selector(output);
-                }
-
-                @this.ReuseSession(state.Session);
-                return state.FinalResult;
-            }
-            catch
-            {
-                @this.OnDebugFault();
-                FaultSession(state.Session);
-                throw;
-            }
-        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -147,84 +86,86 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     static bool Force() => true;
 
-    private struct GetAsyncState<TResult> // this exists mainly so we can have a cheap call-stack for AsyncTransitionPendingRead etc
+    private ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
     {
-        public Input Input;
-        public Func<Output, TResult> Selector;
-        public CancellationToken Token;
-        public ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> Session;
-        public TResult? FinalResult;
-        public ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> PendingRmwResult;
-        public FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty> RmwResult;
-
-        public void ClearPendingRmwResult()
-        {
-#if DEBUG
-            PendingRmwResult = IncorrectRwmState; // deliberately force problems if we try to await incorrectly
-#else
-            PendingRmwResult = default;
-#endif
-        }
-#if DEBUG
-        private static readonly ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> IncorrectRwmState
-        = ValueTask.FromException<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>>(new InvalidOperationException("Incorrect RMW state"));
-#endif
-
-    }
-
-    private unsafe ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
-    {
-        var state = new GetAsyncState<TResult>();
-        state.Input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
-        state.Selector = selector;
-        state.Token = token;
-        state.Session = GetSession();
-        state.FinalResult = default;
-        state.RmwResult = default;
-        state.PendingRmwResult = default;
-        state.ClearPendingRmwResult();
-        return GetAsyncImpl(key, ref state);
-    }
-
-    private unsafe ValueTask<TResult?> GetAsyncImpl<TResult>(string key, ref GetAsyncState<TResult> state)
-    {
+        var session = GetSession();
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            fixed (byte* keyPtr = keySpan)
+            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> pendingRmwResult;
+            unsafe
             {
-                var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                state.PendingRmwResult = state.Session.RMWAsync(fixedKey, state.Input, token: state.Token);
+                fixed (byte* keyPtr = keySpan)
+                {
+                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
+                    var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
+                    pendingRmwResult = session.RMWAsync(ref fixedKey, ref input, token: token);
+                }
             }
-            ReturnLease(lease);
+            ReturnLease(ref lease);
 
-            if (!state.PendingRmwResult.IsCompletedSuccessfully)
+            if (!pendingRmwResult.IsCompletedSuccessfully)
             {
-                return AsyncTransitionGet(ref state, 0);
+                return Awaited(this, session, pendingRmwResult, selector);
             }
-            state.RmwResult = state.PendingRmwResult.GetAwaiter().GetResult();
-            state.ClearPendingRmwResult();
+            var rmwResult = pendingRmwResult.GetAwaiter().GetResult();
 
-            var status = state.RmwResult.Status;
-            var output = state.RmwResult.Output;
+            var status = rmwResult.Status;
+            var output = rmwResult.Output;
             if (status.IsPending)
             {
-                return AsyncTransitionGet(ref state, 1);
+                // WHY NO CompletePendingAsync <== (from search? this one)
+                // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
+                // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
+                // tl;dr: we should not need CompletePendingAsync
+                // await state.Session.CompletePendingAsync(token: state.Token);
+                (status, output) = rmwResult.Complete();
             }
-
+            Assert(status, nameof(session.RMWAsync));
             OnDebugReadComplete(status, async: false);
-            if (IsReadHit(status.Value))
-            {
-                state.FinalResult = state.Selector(output);
-            }
-            ReuseSession(state.Session);
-            return new(state.FinalResult);
+            TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
+            ReuseSession(session);
+            return new(finalResult);
         }
         catch
         {
             OnDebugFault();
-            FaultSession(state.Session);
+            FaultSession(session);
             throw;
+        }
+        static async ValueTask<TResult?> Awaited(DistributedCache @this,
+            ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
+            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> pendingRmwResult,
+            Func<Output, TResult> selector
+            )
+        {
+            try
+            {
+                var rmwResult = await pendingRmwResult;
+
+                var status = rmwResult.Status;
+                var output = rmwResult.Output;
+                if (status.IsPending)
+                {
+                    // WHY NO CompletePendingAsync <== (from search? this one)
+                    // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
+                    // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
+                    // tl;dr: we should not need CompletePendingAsync
+                    // await state.Session.CompletePendingAsync(token: state.Token);
+                    (status, output) = rmwResult.Complete();
+                }
+                Assert(status, nameof(session.RMWAsync));
+                @this.OnDebugReadComplete(status, async: false);
+                TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
+                @this.ReuseSession(session);
+                return finalResult;
+            }
+            catch
+            {
+                @this.OnDebugFault();
+                FaultSession(session);
+                throw;
+            }
         }
     }
 
@@ -238,23 +179,23 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         var session = GetSession();
         try
         {
-
+            Status status;
+            Output output = default;
             fixed (byte* keyPtr = keySpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
-
                 var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
-                Output output = default;
-                var status = session.RMW(ref fixedKey, ref input, ref output);
-                if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
-
-                OnDebugReadComplete(status, async: false);
-                if (IsReadHit(status.Value))
-                {
-                    finalResult = selector(output);
-                }
+                status = session.RMW(ref fixedKey, ref input, ref output);
             }
-            ReturnLease(lease);
+            ReturnLease(ref lease);
+            if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
+            Assert(status, nameof(session.RMW));
+
+            OnDebugReadComplete(status, async: false);
+            if (IsReadHit(status.Value))
+            {
+                finalResult = selector(output);
+            }
             ReuseSession(session);
             return finalResult;
         }
@@ -281,19 +222,21 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         var session = GetSession();
         try
         {
+            Status status;
             fixed (byte* ptr = keySpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                var status = session.Delete(ref fixedKey);
-                if (status.IsPending)
-                {
-                    Output dummy;
-                    Unsafe.SkipInit(out dummy);
-                    CompleteSinglePending(session, ref status, ref dummy);
-                }
-                Debug.WriteLine($"Delete: {status}");
+                status = session.Delete(ref fixedKey);
             }
-            ReturnLease(lease);
+            ReturnLease(ref lease);
+            if (status.IsPending)
+            {
+                Output dummy;
+                Unsafe.SkipInit(out dummy);
+                CompleteSinglePending(session, ref status, ref dummy);
+            }
+            Assert(status, nameof(session.Delete));
+
             ReuseSession(session);
         }
         catch
@@ -303,33 +246,67 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
     }
 
-    async Task IDistributedCache.RemoveAsync(string key, CancellationToken token)
+    Task IDistributedCache.RemoveAsync(string key, CancellationToken token)
     {
-        var keyLength = WriteKey(key, out var lease);
-        var keyMemory = new Memory<byte>(lease, 0, keyLength);
         var session = GetSession();
         try
         {
-            using (keyMemory.Pin())
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<Input, Output, Empty>> pendingDeleteResult;
+            unsafe
             {
-                var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
-                var result = await session.DeleteAsync(ref fixedKey, token: token);
-                var status = result.Status;
-                if (status.IsPending)
+                fixed (byte* keyPtr = keySpan)
                 {
-                    // search: WHY NO CompletePendingAsync
-                    // await session.CompletePendingAsync(token: token);
-                    status = result.Complete();
+                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
+                    pendingDeleteResult = session.DeleteAsync(ref fixedKey, token: token);
                 }
-                Debug.WriteLine($"Delete: {status}");
             }
-            ReturnLease(lease);
+            ReturnLease(ref lease);
+
+            if (!pendingDeleteResult.IsCompletedSuccessfully)
+            {
+                return Awaited(this, session, pendingDeleteResult);
+            }
+            var deleteResult = pendingDeleteResult.GetAwaiter().GetResult();
+            var status = deleteResult.Status;
+            if (status.IsPending)
+            {
+                // search: WHY NO CompletePendingAsync
+                // await session.CompletePendingAsync(token: token);
+                status = deleteResult.Complete();
+            }
+            Assert(status, nameof(session.DeleteAsync));
             ReuseSession(session);
+            return Task.CompletedTask;
         }
         catch
         {
             FaultSession(session);
             throw;
+        }
+
+        static async Task Awaited(DistributedCache @this,
+            ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
+            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<Input, Output, Empty>> pendingDeleteResult)
+        {
+            try
+            {
+                var deleteResult = await pendingDeleteResult;
+                var status = deleteResult.Status;
+                if (status.IsPending)
+                {
+                    // search: WHY NO CompletePendingAsync
+                    // await session.CompletePendingAsync(token: token);
+                    status = deleteResult.Complete();
+                }
+                Assert(status, nameof(session.DeleteAsync));
+                @this.ReuseSession(session);
+            }
+            catch
+            {
+                FaultSession(session);
+                throw;
+            }
         }
 
     }
@@ -375,23 +352,24 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         var session = GetSession();
         try
         {
-            Debug.WriteLine("Write: " + BitConverter.ToString(valueSpan.Slice(12).ToArray()));
+            Status status;
             fixed (byte* keyPtr = keySpan)
             fixed (byte* valuePtr = valueSpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
                 var fixedValue = SpanByte.FromFixedSpan(valueSpan);
-                var status = session.Upsert(ref fixedKey, ref fixedValue);
-                if (status.IsPending)
-                {
-                    Output dummy;
-                    Unsafe.SkipInit(out dummy);
-                    CompleteSinglePending(session, ref status, ref dummy);
-                }
-                Debug.WriteLine($"Upsert: {status}");
+                status = session.Upsert(ref fixedKey, ref fixedValue);
             }
-            ReturnLease(keyLease);
-            ReturnLease(valueLease);
+            ReturnLease(ref keyLease);
+            ReturnLease(ref valueLease);
+
+            if (status.IsPending)
+            {
+                Output dummy;
+                Unsafe.SkipInit(out dummy);
+                CompleteSinglePending(session, ref status, ref dummy);
+            }
+            Assert(status, nameof(session.Upsert));
             ReuseSession(session);
         }
         catch
@@ -400,27 +378,67 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             throw;
         }
     }
-
+    static void Assert(Status status, string method)
+    {
+        Debug.WriteLine($"{method}: {status}");
+        if (status.IsFaulted) Throw(method);
+        static void Throw(string method) => throw new InvalidOperationException("FASTER call faulted: " + method);
+    }
     Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
         => WriteAsync(key, new(value), options, token).AsTask();
 
 
-    async ValueTask WriteAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
+    ValueTask WriteAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
     {
-        var keyLength = WriteKey(key, out var keyLease);
-        var keyMemory = new Memory<byte>(keyLease, 0, keyLength);
-        var valueMemory = WriteValue(value, out var valueLease, options);
-
         var session = GetSession();
         try
         {
-            Debug.WriteLine("Write: " + BitConverter.ToString(valueMemory.Slice(12).ToArray()));
-            using (keyMemory.Pin()) // TODO: better pinning
-            using (valueMemory.Pin())
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+            var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default, value, out var valueLease, options);
+            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> pendingUpsertResult;
+            unsafe
             {
-                var fixedKey = SpanByte.FromPinnedMemory(keyMemory);
-                var fixedValue = SpanByte.FromPinnedMemory(valueMemory);
-                var upsertResult = await session.UpsertAsync(ref fixedKey, ref fixedValue, token: token);
+                fixed (byte* keyPtr = keySpan)
+                fixed (byte* valuePtr = valueSpan)
+                {
+                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
+                    var fixedValue = SpanByte.FromFixedSpan(valueSpan);
+                    pendingUpsertResult = session.UpsertAsync(ref fixedKey, ref fixedValue, token: token);
+                }
+            }
+            ReturnLease(ref lease);
+            ReturnLease(ref valueLease);
+
+            if (!pendingUpsertResult.IsCompletedSuccessfully)
+            {
+                return Awaited(this, session, pendingUpsertResult);
+            }
+            var upsertResult = pendingUpsertResult.GetAwaiter().GetResult();
+            var status = upsertResult.Status;
+            if (status.IsPending)
+            {
+                // search: WHY NO CompletePendingAsync
+                // await session.CompletePendingAsync(token: token);
+                status = upsertResult.Complete();
+            }
+            Assert(status, nameof(session.UpsertAsync));
+            ReuseSession(session);
+            return default;
+        }
+        catch
+        {
+            FaultSession(session);
+            throw;
+        }
+
+        static async ValueTask Awaited(DistributedCache @this,
+            ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
+            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> pendingUpsertResult
+            )
+        {
+            try
+            {
+                var upsertResult = await pendingUpsertResult;
                 var status = upsertResult.Status;
                 if (status.IsPending)
                 {
@@ -428,16 +446,14 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     // await session.CompletePendingAsync(token: token);
                     status = upsertResult.Complete();
                 }
-                Debug.WriteLine($"Upsert: {status}");
+                Assert(status, nameof(session.UpsertAsync));
+                @this.ReuseSession(session);
             }
-            ReturnLease(keyLease);
-            ReturnLease(valueLease);
-            ReuseSession(session);
-        }
-        catch
-        {
-            FaultSession(session);
-            throw;
+            catch
+            {
+                FaultSession(session);
+                throw;
+            }
         }
     }
 
