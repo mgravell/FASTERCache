@@ -123,7 +123,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 (status, output) = rmwResult.Complete();
             }
             Assert(status, nameof(session.RMWAsync));
-            OnDebugReadComplete(status, async: false);
+            OnDebugRMWComplete(status, async: false);
             TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
             ReuseSession(session);
             return new(finalResult);
@@ -156,7 +156,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     (status, output) = rmwResult.Complete();
                 }
                 Assert(status, nameof(session.RMWAsync));
-                @this.OnDebugReadComplete(status, async: false);
+                @this.OnDebugRMWComplete(status, async: false);
                 TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
                 @this.ReuseSession(session);
                 return finalResult;
@@ -191,9 +191,9 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             }
             ReturnLease(ref lease);
             if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
-            Assert(status, nameof(session.RMW));
 
-            OnDebugReadComplete(status, async: false);
+            Assert(status, nameof(session.RMW));
+            OnDebugRMWComplete(status, async: false);
             if (IsReadHit(status.Value))
             {
                 finalResult = selector(output);
@@ -239,7 +239,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 CompleteSinglePending(session, ref status, ref dummy);
             }
             Assert(status, nameof(session.Delete));
-
+            OnDebugRemoveComplete(status, false);
             ReuseSession(session);
         }
         catch
@@ -280,6 +280,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 status = deleteResult.Complete();
             }
             Assert(status, nameof(session.DeleteAsync));
+            OnDebugRemoveComplete(status, false);
             ReuseSession(session);
             return Task.CompletedTask;
         }
@@ -304,6 +305,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     status = deleteResult.Complete();
                 }
                 Assert(status, nameof(session.DeleteAsync));
+                @this.OnDebugRemoveComplete(status, true);
                 @this.ReuseSession(session);
             }
             catch
@@ -376,6 +378,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 CompleteSinglePending(session, ref status, ref dummy);
             }
             Assert(status, nameof(session.Upsert));
+            OnDebugUpsertComplete(status, false);
             ReuseSession(session);
         }
         catch
@@ -430,6 +433,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 status = upsertResult.Complete();
             }
             Assert(status, nameof(session.UpsertAsync));
+            OnDebugUpsertComplete(status, false);
             ReuseSession(session);
             return default;
         }
@@ -455,6 +459,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     status = upsertResult.Complete();
                 }
                 Assert(status, nameof(session.UpsertAsync));
+                @this.OnDebugUpsertComplete(status, true);
                 @this.ReuseSession(session);
             }
             catch

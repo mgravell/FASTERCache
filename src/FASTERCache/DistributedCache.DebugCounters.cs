@@ -7,7 +7,9 @@ namespace FASTERCache;
 
 partial class DistributedCache
 {
-    partial void OnDebugReadComplete(Status status, bool async);
+    partial void OnDebugRMWComplete(Status status, bool async);
+    partial void OnDebugRemoveComplete(Status status, bool async);
+    partial void OnDebugUpsertComplete(Status status, bool async);
     partial void OnDebugFault();
     partial void DebugWipe(Span<byte> buffer);
     partial void DebugWipe(ReadOnlySpan<byte> buffer);
@@ -18,7 +20,12 @@ partial class DistributedCache
     partial void DebugWipe(Span<byte> buffer) => buffer.Clear();
     partial void DebugWipe(ReadOnlySpan<byte> buffer) => MemoryMarshal.CreateSpan(
         ref MemoryMarshal.GetReference(buffer), buffer.Length).Clear();
-    partial void OnDebugReadComplete(Status status, bool async)
+
+    partial void OnDebugRemoveComplete(Status status, bool async) => OnDebugComplete(status, async);
+    partial void OnDebugUpsertComplete(Status status, bool async) => OnDebugComplete(status, async);
+    partial void OnDebugRMWComplete(Status status, bool async) => OnDebugComplete(status, async);
+
+    private void OnDebugComplete(Status status, bool async)
     {
         if (status.IsCompletedSuccessfully)
         {
