@@ -23,6 +23,21 @@ await obj.SQLite_SetAsync();
 Console.WriteLine(obj.SQLite_Get());
 Console.WriteLine(await obj.SQLite_GetAsync());
 
+#if REDIS
+Console.WriteLine();
+obj.Redis_Set();
+await obj.Redis_SetAsync();
+Console.WriteLine(obj.Redis_Get());
+Console.WriteLine(await obj.Redis_GetAsync());
+#endif
+
+#if GARNET
+Console.WriteLine();
+obj.Garnet_Set();
+await obj.Garnet_SetAsync();
+Console.WriteLine(obj.Garnet_Get());
+Console.WriteLine(await obj.Garnet_GetAsync());
+#endif
 
 #if NET8_0_OR_GREATER
 Console.WriteLine();

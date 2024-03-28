@@ -22,8 +22,14 @@ public class CacheBenchmarks : IDisposable
 #if NET8_0_OR_GREATER
     private readonly IDistributedCache _rocks;
 #endif
+#if REDIS
+    private readonly IDistributedCache _redis;
+#endif
+#if GARNET
+    private readonly IDistributedCache _garnet;
+#endif
 
-    [Params(true, false)]
+    // [Params(true, false)]
     public bool Sliding { get; set; } = true;
 
     [Params(128)]
@@ -72,6 +78,17 @@ public class CacheBenchmarks : IDisposable
         services.AddSqliteCache(options => options.CachePath = @"sqlite.db", null!);
         _sqlite = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
 
+#if REDIS
+        services = new ServiceCollection();
+        services.AddStackExchangeRedisCache(options => options.Configuration = "127.0.0.1:6379");
+        _redis = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
+#endif
+#if GARNET
+        services = new ServiceCollection();
+        services.AddStackExchangeRedisCache(options => options.Configuration = "127.0.0.1:3278");
+        _garnet = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
+#endif
+
 #if NET8_0_OR_GREATER
         _rocks = new FusionRocks.FusionRocks(new FusionRocksOptions { CachePath = "rocks" });
 #endif
@@ -85,6 +102,13 @@ public class CacheBenchmarks : IDisposable
 #if NET8_0_OR_GREATER
         (_rocks as IDisposable)?.Dispose();
 #endif
+#if REDIS
+        (_redis as IDisposable)?.Dispose();
+#endif
+#if GARNET
+        (_garnet as IDisposable)?.Dispose();
+#endif
+
     }
 
     private int Get(IDistributedCache cache) => Assert(cache.Get(key));
@@ -235,6 +259,34 @@ public class CacheBenchmarks : IDisposable
 
     [Benchmark]
     public Task SQLite_SetAsync() => SetAsync(_sqlite);
+
+#if REDIS
+    [Benchmark]
+    public int Redis_Get() => Get(_redis);
+
+    [Benchmark]
+    public void Redis_Set() => Set(_redis);
+
+    [Benchmark]
+    public ValueTask<int> Redis_GetAsync() => GetAsync(_redis);
+
+    [Benchmark]
+    public Task Redis_SetAsync() => SetAsync(_redis);
+#endif
+
+#if GARNET
+    [Benchmark]
+    public int Garnet_Get() => Get(_garnet);
+
+    [Benchmark]
+    public void Garnet_Set() => Set(_garnet);
+
+    [Benchmark]
+    public ValueTask<int> Garnet_GetAsync() => GetAsync(_garnet);
+
+    [Benchmark]
+    public Task Garnet_SetAsync() => SetAsync(_garnet);
+#endif
 
 #if NET8_0_OR_GREATER
     [Benchmark]

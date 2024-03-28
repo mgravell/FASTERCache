@@ -2,13 +2,17 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
+        <!-- GARNET currently blocked on https://github.com/dotnet/aspnetcore/pull/54689 -->
+        <DefineConstants>$(DefineConstants);REDIS</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="BenchmarkDotNet" />
-        <PackageReference Include="FusionRocks" Condition="'$(TargetFramework)'=='net8.0'"/>
+        <PackageReference Include="FusionRocks" Condition="'$(TargetFramework)'=='net8.0'" />
+        <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
         <PackageReference Include="NeoSmart.Caching.Sqlite" />
         <PackageReference Include="NeoSmart.Caching.Sqlite.AspNetCore" />
+        <PackageReference Include="StackExchange.Redis" />
     </ItemGroup>
 
     <ItemGroup>

@@ -1,20 +1,22 @@
 <Project>
-    <ItemGroup>
-        <PackageVersion Include="BenchmarkDotNet" Version="0.13.12" />
-        <PackageVersion Include="coverlet.collector" Version="6.0.2" />
-        <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="8.0.0" />
-        <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
-        <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.1" />
-        <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.2" />
-        <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
-        <PackageVersion Include="NeoSmart.Caching.Sqlite" Version="8.0.0" />
-        <PackageVersion Include="NeoSmart.Caching.Sqlite.AspNetCore" Version="8.0.0" />
-        <PackageVersion Include="xunit" Version="2.7.0" />
-        <PackageVersion Include="xunit.runner.visualstudio" Version="2.5.7" />
-        <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
-        <PackageVersion Include="Nerdbank.GitVersioning" Version="3.6.133" />
-        <PackageVersion Include="Microsoft.FASTER.Core" Version="2.6.3" />
-        <PackageVersion Include="FusionRocks" Version="0.1.0" />
-        <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4" />
-    </ItemGroup>
+  <ItemGroup>
+    <PackageVersion Include="BenchmarkDotNet" Version="0.13.12" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="8.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageVersion Include="NeoSmart.Caching.Sqlite" Version="8.0.0" />
+    <PackageVersion Include="NeoSmart.Caching.Sqlite.AspNetCore" Version="8.0.0" />
+    <PackageVersion Include="StackExchange.Redis" Version="2.7.33" />
+    <PackageVersion Include="xunit" Version="2.7.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.5.7" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
+    <PackageVersion Include="Nerdbank.GitVersioning" Version="3.6.133" />
+    <PackageVersion Include="Microsoft.FASTER.Core" Version="2.6.3" />
+    <PackageVersion Include="FusionRocks" Version="0.1.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4" />
+  </ItemGroup>
 </Project>
