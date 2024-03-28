@@ -1,2 +1,8 @@
 ﻿#nullable enable
+FASTERCache.FASTERCacheBuilder.CreateDistributedCache() -> FASTERCache.IFASTERDistributedCache!
 FASTERCache.FASTERCacheBuilder.WithClock(System.TimeProvider! clock) -> FASTERCache.FASTERCacheBuilder!
+FASTERCache.IFASTERDistributedCache
+FASTERCache.IFASTERDistributedCache.Get<TState, TValue>(string! key, TState state, System.Func<TState, System.Buffers.ReadOnlySequence<byte>, TValue>! deserializer) -> TValue?
+FASTERCache.IFASTERDistributedCache.GetAsync<TState, TValue>(string! key, TState state, System.Func<TState, System.Buffers.ReadOnlySequence<byte>, TValue>! deserializer, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<TValue?>
+static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.Get<TState, TValue>(this Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, string! key, in TState state, System.Func<TState, System.Buffers.ReadOnlySequence<byte>, TValue>! deserializer) -> TValue?
+static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.GetAsync<TState, TValue>(this Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, string! key, in TState state, System.Func<TState, System.Buffers.ReadOnlySequence<byte>, TValue>! deserializer, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<TValue?>

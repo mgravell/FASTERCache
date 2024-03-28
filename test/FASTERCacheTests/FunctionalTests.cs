@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Caching.Distributed;
+﻿using FASTER.core;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Internal;
 using System;
@@ -6,6 +7,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Tasks;
 using Xunit.Abstractions;
 
@@ -74,7 +76,29 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 #endif
     }
 
-    private static string Caller([CallerMemberName] string caller = "") => caller;
+    private static string Caller(bool sliding, [CallerMemberName] string caller = "") => $"{caller}:{sliding}";
+
+    static readonly Func<int, ReadOnlySequence<byte>, string> Deserializer = static (s, payload) => s.ToString() + ":" + Encoding.UTF8.GetString(payload);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void InPlaceRead(bool sliding)
+    {
+        SetSliding(sliding);
+        var key = Caller(sliding);
+        Assert.Null(Cache.Get(key));
+
+        var faster = Assert.IsAssignableFrom<IFASTERDistributedCache>(Cache);
+        string? s = faster.Get(key, 42, Deserializer);
+        Assert.Null(s);
+
+        var original = Guid.NewGuid().ToString();
+        Cache.Set(key, Encoding.UTF8.GetBytes(original));
+        s = faster.Get(key, 42, Deserializer);
+        Assert.Equal("42:" + original, s);
+        WriteStats();
+    }
 
     [Theory]
     [InlineData(true)]
@@ -82,7 +106,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     public void BasicUsage(bool sliding)
     {
         SetSliding(sliding);
-        var key = Caller();
+        var key = Caller(sliding);
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
         Cache.Set(key, original);
@@ -107,7 +131,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     public async Task BasicUsageAsync(bool sliding)
     {
         SetSliding(sliding);
-        var key = Caller();
+        var key = Caller(sliding);
         var bw = new ArrayBufferWriter<byte>();
         Assert.Null(await Cache.GetAsync(key));
         Assert.False(await BufferCache.GetAsync(key, bw));
@@ -153,7 +177,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     public void RelativeExpiration(bool sliding)
     {
         SetSliding(sliding);
-        var key = Caller();
+        var key = Caller(sliding);
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
         Cache.Set(key, original, RelativeFiveMinutes);
@@ -179,7 +203,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     public async Task RelativeExpirationAsync(bool sliding)
     {
         SetSliding(sliding);
-        var key = Caller();
+        var key = Caller(sliding);
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
         await Cache.SetAsync(key, original, RelativeFiveMinutes);
@@ -203,7 +227,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     public void SlidingExpiration()
     {
         SetSliding(true);
-        var key = Caller();
+        var key = Caller(sliding: true);
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
         Cache.Set(key, original, SlidingOneMinute);
@@ -240,7 +264,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     public async Task SlidingExpirationAsync()
     {
         SetSliding(true);
-        var key = Caller();
+        var key = Caller(sliding: true);
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
         await Cache.SetAsync(key, original, SlidingOneMinute);
@@ -277,7 +301,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     public async Task SlidingExpirationForcedAsync()
     {
         SetSliding(true);
-        var key = Caller();
+        var key = Caller(sliding: true);
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
         // memory size is PageSizeBits+2
@@ -348,6 +372,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
             log.WriteLine($"Sync: {dc.TotalSync}");
             log.WriteLine($"Async: {dc.TotalAsync}");
             log.WriteLine($"Copy-Update: {dc.TotalCopyUpdate}");
+            log.WriteLine($"Other: {dc.TotalOther}");
             log.WriteLine($"Fault: {dc.TotalFault}");
         }
 #endif

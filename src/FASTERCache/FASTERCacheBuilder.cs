@@ -31,6 +31,8 @@ public sealed class FASTERCacheBuilder
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         return this;
     }
+    internal object? Clock => _clock;
+
     public FASTERCacheBuilder WithLogger(ILogger logger)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -50,5 +52,5 @@ public sealed class FASTERCacheBuilder
     }
 #endif
     internal CacheService GetCacheService() => _service ??= new(Options, _logger);
-    public IDistributedCache CreateDistributedCache() => new DistributedCache(GetCacheService(), _clock);
+    public IFASTERDistributedCache CreateDistributedCache() => new DistributedCache(Options, GetCacheService(), _clock);
 }

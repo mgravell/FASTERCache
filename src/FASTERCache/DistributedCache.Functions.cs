@@ -1,67 +1,75 @@
 ﻿using FASTER.core;
-using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
-using static FASTERCache.DistributedCache;
+using System.Runtime;
 
 namespace FASTERCache;
 
 partial class DistributedCache
 {
-    internal abstract class CacheFunctions : CacheFunctionsBase<Input, Output, Empty>
+    internal interface IInputTime
     {
-        public static CacheFunctions Create(ISystemClock time) => new SystemClockFunctions(time);
-#if NET8_0_OR_GREATER
-        public static CacheFunctions Create(TimeProvider time) => new TimeProviderFunctions(time);
-#endif
-        public static CacheFunctions Create()
+        long NowTicks { get; }
+    }
+    internal sealed class ByteArrayFunctions : CacheFunctions<BasicInputContext, byte[]>
+    {
+        private ByteArrayFunctions() { }
+        public static readonly ByteArrayFunctions Instance = new();
+        protected override void Read(ref BasicInputContext input, ReadOnlySpan<byte> payload, ref byte[] output)
         {
-#if NET8_0_OR_GREATER
-            return new TimeProviderFunctions(TimeProvider.System);
-#else
-        return new SystemClockFunctions(SystemClockFunctions.SharedClock);
-#endif
+            output = payload.ToArray();
         }
+    }
+    internal sealed class BooleanFunctions : CacheFunctions<BasicInputContext, bool>
+    {
+        private BooleanFunctions() { }
+        public static readonly BooleanFunctions Instance = new ();
 
-        public abstract long NowTicks { get; }
+        protected override void Read(ref BasicInputContext input, ReadOnlySpan<byte> payload, ref bool output)
+        {
+            input.Target?.Write(payload);
+            output = true;
+        }
+    }
 
-        public override bool ConcurrentReader(ref SpanByte key, ref Input input, ref SpanByte value, ref Output dst, ref ReadInfo readInfo)
+    internal abstract class CacheFunctions<TInput, TOutput> : CacheFunctionsBase<TInput, TOutput, Empty>
+        where TInput : struct, IInputTime
+    {
+        public override bool ConcurrentReader(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput dst, ref ReadInfo readInfo)
         {
             var span = value.AsSpan();
 
             // check for expiration
             var absolute = BinaryPrimitives.ReadInt64LittleEndian(span);
-            var now = NowTicks;
+            var now = input.NowTicks;
             if (absolute <= now)
             {
                 readInfo.Action = ReadAction.Expire;
                 return false;
             }
-            var sliding = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(8));
 
             // copy data out to the query, if needed
-            if (input.ReadToWriter) input.Writer.Write(span.Slice(12));
-            byte[] payload = input.ReadToArray ? span.Slice(12).ToArray() : [];
-            dst = new(absolute, sliding, payload);
-
+            Read(ref input, span.Slice(12), ref dst);
             return true;
         }
 
-        public override bool SingleReader(ref SpanByte key, ref Input input, ref SpanByte value, ref Output dst, ref ReadInfo readInfo)
+        protected virtual void Read(ref TInput input, ReadOnlySpan<byte> payload, ref TOutput output) { }
+
+        public override bool SingleReader(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput dst, ref ReadInfo readInfo)
             => ConcurrentReader(ref key, ref input, ref value, ref dst, ref readInfo);
 
-        public override bool Write(ref Input input, ref SpanByte src, ref SpanByte dst, ref UpsertInfo upsertInfo)
+        public override bool Write(ref TInput input, ref SpanByte src, ref SpanByte dst, ref UpsertInfo upsertInfo)
             => Copy(ref src, ref dst);
 
-        public override bool InPlaceUpdater(ref SpanByte key, ref Input input, ref SpanByte value, ref Output output, ref RMWInfo rmwInfo)
+        public override bool InPlaceUpdater(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput output, ref RMWInfo rmwInfo)
         {
             var span = value.AsSpan();
 
             // check for expiration
-            var absolute = BinaryPrimitives.ReadInt64LittleEndian(span);
-            var now = NowTicks;
-            if (absolute <= now)
+            var expiration = BinaryPrimitives.ReadInt64LittleEndian(span);
+            var now = input.NowTicks;
+            if (expiration <= now)
             {
                 rmwInfo.Action = RMWAction.ExpireAndStop;
                 return false;
@@ -69,15 +77,13 @@ partial class DistributedCache
             var sliding = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(8));
 
             // copy data out to the query, if needed
-            if (input.ReadToWriter) input.Writer.Write(span.Slice(12));
-            byte[] payload = input.ReadToArray ? span.Slice(12).ToArray() : [];
-            output = new(absolute, sliding, payload);
+            Read(ref input, span.Slice(12), ref output);
 
             // apply sliding expiration, if needed
             if (sliding > 0)
             {
                 var newAbsolute = now + sliding;
-                if (newAbsolute > output.AbsoluteExpiration)
+                if (newAbsolute > expiration)
                 {
                     // update the expiry and commit
                     BinaryPrimitives.WriteInt64LittleEndian(span, newAbsolute);
@@ -88,34 +94,14 @@ partial class DistributedCache
             return true;
         }
 
-        public override bool NeedInitialUpdate(ref SpanByte key, ref Input input, ref Output output, ref RMWInfo rmwInfo)
+        public override bool NeedInitialUpdate(ref SpanByte key, ref TInput input, ref TOutput output, ref RMWInfo rmwInfo)
             => false;
-        public override bool NeedCopyUpdate(ref SpanByte key, ref Input input, ref SpanByte oldValue, ref Output output, ref RMWInfo rmwInfo)
+        public override bool NeedCopyUpdate(ref SpanByte key, ref TInput input, ref SpanByte oldValue, ref TOutput output, ref RMWInfo rmwInfo)
             => true;
-        public override bool InitialUpdater(ref SpanByte key, ref Input input, ref SpanByte value, ref Output output, ref RMWInfo rmwInfo)
+        public override bool InitialUpdater(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput output, ref RMWInfo rmwInfo)
             => true;
-        public override bool CopyUpdater(ref SpanByte key, ref Input input, ref SpanByte oldValue, ref SpanByte newValue, ref Output output, ref RMWInfo rmwInfo)
+        public override bool CopyUpdater(ref SpanByte key, ref TInput input, ref SpanByte oldValue, ref SpanByte newValue, ref TOutput output, ref RMWInfo rmwInfo)
             => Copy(ref oldValue, ref newValue) && InPlaceUpdater(ref key, ref input, ref newValue, ref output, ref rmwInfo);
-
-
-#if NET8_0_OR_GREATER
-        private sealed class TimeProviderFunctions : CacheFunctions
-        {
-            public TimeProviderFunctions(TimeProvider time) => _time = time;
-            private readonly TimeProvider _time;
-            public override long NowTicks => _time.GetUtcNow().UtcTicks;
-        }
-#endif
-        private sealed class SystemClockFunctions : CacheFunctions
-        {
-#if !NET8_0_OR_GREATER
-            private static SystemClock? s_sharedClock;
-            internal static SystemClock SharedClock => s_sharedClock ??= new();
-#endif
-            public SystemClockFunctions(ISystemClock time) => _time = time;
-            private readonly ISystemClock _time;
-            public override long NowTicks => _time.UtcNow.UtcTicks;
-        }
     }
 
 }

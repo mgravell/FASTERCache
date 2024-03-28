@@ -5,9 +5,9 @@ using System.Threading;
 using System.Threading.Tasks;
 namespace FASTERCache;
 
-internal sealed partial class OutputCacheStore : CacheBase<OutputCacheStore.Input, OutputCacheStore.Output, Empty, OutputCacheStore.CacheFunctions>, IOutputCacheStore
+internal sealed partial class OutputCacheStore : CacheBase, IOutputCacheStore
 {
-    internal OutputCacheStore(CacheService cacheService) : base(cacheService, new CacheFunctions())
+    internal OutputCacheStore(CacheService cacheService, object? clock) : base(cacheService, clock)
     {
     }
 
@@ -29,5 +29,9 @@ internal sealed partial class OutputCacheStore : CacheBase<OutputCacheStore.Inpu
 
     internal readonly struct Input { }
     internal readonly struct Output { }
-    internal sealed class CacheFunctions : CacheFunctionsBase<Input, Output, Empty> { }
+    internal sealed class SimpleFunctions : CacheFunctionsBase<Input, Output, Empty>
+    {
+        private SimpleFunctions() { }
+        public static readonly SimpleFunctions Instance = new();
+    }
 }

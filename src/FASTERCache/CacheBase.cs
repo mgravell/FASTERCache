@@ -1,9 +1,10 @@
 ﻿using FASTER.core;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 
@@ -15,6 +16,22 @@ namespace FASTERCache;
 /// </summary>
 internal abstract class CacheBase : IDisposable
 {
+    public CacheBase(CacheService cacheService, object? clock)
+    {
+        Cache = cacheService;
+        Clock = clock switch
+        {
+            Clock typed => typed,
+#if NET8_0_OR_GREATER
+            TimeProvider timeProvider => Clock.Create(timeProvider),
+#endif
+            ISystemClock systemClock => Clock.Create(systemClock),
+            null => Clock.Create(),
+            _ => throw new ArgumentException("Unexpected clock type: " + clock.GetType().Name, nameof(clock)),
+        };
+        Cache.AddRef();
+    }
+
     private int _isDisposed;
     internal bool IsDisposed => Volatile.Read(ref _isDisposed) != 0;
     protected abstract byte KeyPrefix { get; }
@@ -25,7 +42,7 @@ internal abstract class CacheBase : IDisposable
             RemoveRef();
         }
     }
-    private protected abstract void RemoveRef();
+    private protected void RemoveRef() => Cache.RemoveRef();
     protected static UTF8Encoding Encoding = new(false);
 
     protected static void FaultSession(IDisposable session)
@@ -35,6 +52,21 @@ internal abstract class CacheBase : IDisposable
             session?.Dispose();
         }
         catch { } // we already expect trouble; don't make it worse
+    }
+
+    protected static void ReuseSession<TSession>(
+        ConcurrentBag<TSession> sessions,
+        TSession session) where TSession : class, IDisposable
+    {
+        const int MAX_APPROX_SESSIONS = 20;
+        if (sessions.Count <= MAX_APPROX_SESSIONS) // note race, that's fine
+        {
+            sessions.Add(session);
+        }
+        else
+        {
+            session.Dispose();
+        }
     }
 
     protected static void ReturnLease(ref byte[]? lease)
@@ -66,31 +98,38 @@ internal abstract class CacheBase : IDisposable
         Debug.Assert(length == actualLength + 1);
         return target;
     }
-}
-internal abstract class CacheBase<TInput, TOutput, TContext, TFunctions> : CacheBase
-    where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, TContext>
-{
 
-    private protected sealed override void RemoveRef() => Cache.RemoveRef();
-    protected readonly CacheService Cache;
-    protected readonly TFunctions Functions;
-
-    private readonly ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, TContext, TFunctions>> _clientSessions = [];
-
-    public CacheBase(CacheService cacheService, TFunctions functions)
+    internal static object? GetClockObject(IServiceProvider services)
     {
-        Functions = functions;
-        Cache = cacheService;
-        Cache.AddRef();
+        if (services is null) return null;
+#if NET8_0_OR_GREATER
+        if (services.GetService<TimeProvider>() is { } time)
+        {
+            return time;
+        }
+#endif
+        return services.GetService<ISystemClock>();
     }
 
-    protected static void CompleteSinglePending(ClientSession<SpanByte, SpanByte, TInput, TOutput, TContext, TFunctions> session, ref Status status, ref TOutput output)
+    protected readonly CacheService Cache;
+    protected readonly Clock Clock;
+
+
+    protected ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions> GetSession<TInput, TOutput, TFunctions>(
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>> sessions,
+        TFunctions functions
+    )
+        where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+        => sessions.TryTake(out var session) ? session : Cache.CreateSession<TInput, TOutput, Empty, TFunctions>(functions);
+
+    protected static void CompleteSinglePending<TInput, TOutput, TFunctions>(ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions> session, ref Status status, ref TOutput output)
+        where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
     {
         if (!session.CompletePendingWithOutputs(out var outputs, wait: true)) Throw();
         int count = 0;
         while (outputs.Next())
         {
-            ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, TContext> current = ref outputs.Current;
+            ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, Empty> current = ref outputs.Current;
             status = current.Status;
             output = current.Output;
             count++;
@@ -99,22 +138,35 @@ internal abstract class CacheBase<TInput, TOutput, TContext, TFunctions> : Cache
 
         static void Throw() => throw new InvalidOperationException("Exactly one pending operation was expected");
     }
+}
 
+internal abstract class Clock
+{
+    public abstract long NowTicks { get; }
 
-    protected ClientSession<SpanByte, SpanByte, TInput, TOutput, TContext, TFunctions> GetSession()
-       => _clientSessions.TryTake(out var session) ? session : Cache.CreateSession<TInput, TOutput, TContext, TFunctions>(Functions);
-
-    protected void ReuseSession(
-        ClientSession<SpanByte, SpanByte, TInput, TOutput, TContext, TFunctions> session)
+#if NET8_0_OR_GREATER
+    private sealed class TimeProviderClock : Clock
     {
-        const int MAX_APPROX_SESSIONS = 20;
-        if (_clientSessions.Count <= MAX_APPROX_SESSIONS) // note race, that's fine
-        {
-            _clientSessions.Add(session);
-        }
-        else
-        {
-            session.Dispose();
-        }
+        private static TimeProviderClock? s_shared;
+        internal static TimeProviderClock Shared => s_shared ??= new(TimeProvider.System);
+        public TimeProviderClock(TimeProvider time) => _time = time;
+        private readonly TimeProvider _time;
+        public override long NowTicks => _time.GetUtcNow().UtcTicks;
+    }
+    internal static Clock Create(TimeProvider time) => new TimeProviderClock(time);
+    internal static Clock Create() => TimeProviderClock.Shared;
+#else
+        internal static Clock Create() => SystemClockClock.Shared;
+#endif
+    internal static Clock Create(ISystemClock time) => new SystemClockClock(time);
+    private sealed class SystemClockClock : Clock
+    {
+#if !NET8_0_OR_GREATER
+        private static SystemClockClock? s_shared;
+        internal static SystemClockClock Shared => s_shared ??= new(new SystemClock());
+#endif
+        public SystemClockClock(ISystemClock time) => _time = time;
+        private readonly ISystemClock _time;
+        public override long NowTicks => _time.UtcNow.UtcTicks;
     }
 }

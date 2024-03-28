@@ -13,52 +13,60 @@ namespace Microsoft.Extensions.DependencyInjection;
 /// </summary>
 public static class FASTERCacheServiceExtensions
 {
-    public static TValue Get<TState, TValue>(this IDistributedCache cache, string key, in TState state, Deserializer<TState, TValue> deserializer)
+    public static TValue? Get<TState, TValue>(this IDistributedCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
     {
-        if (cache is IExperimentalBufferCache cacheEx)
+        if (cache is IFASTERDistributedCache fasterCache)
         {
-            return cacheEx.Get(key, state, deserializer);
+            return fasterCache.Get(key, state, deserializer);
+        }
+        if (cache is IExperimentalBufferCache bufferCache)
+        {
+            return bufferCache.Get(key, state, deserializer);
         }
         var arr = cache.Get(key);
-        return deserializer(state, arr is not null, arr);
+        return arr is null ? default : deserializer(state, new(arr));
     }
 
-    internal static TValue Get<TState, TValue>(this IExperimentalBufferCache cache, string key, in TState state, Deserializer<TState, TValue> deserializer)
+    private static TValue? Get<TState, TValue>(this IExperimentalBufferCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
     {
         var bw = new ArrayBufferWriter<byte>(); // TODO: recycling
-        return deserializer(state, cache.Get(key, bw), bw.WrittenSpan);
+        return cache.Get(key, bw) ? deserializer(state, new(bw.WrittenMemory)) : default;
     }
 
-    public static ValueTask<TValue> GetAsync<TState, TValue>(this IDistributedCache cache, string key, in TState state, Deserializer<TState, TValue> deserializer, CancellationToken token = default)
+    public static ValueTask<TValue?> GetAsync<TState, TValue>(this IDistributedCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token = default)
     {
-        if (cache is IExperimentalBufferCache cacheEx)
+        if (cache is IFASTERDistributedCache fasterCache)
         {
-            return cacheEx.GetAsync(key, state, deserializer, token);
+            return fasterCache.GetAsync(key, state, deserializer, token);
+        }
+        if (cache is IExperimentalBufferCache bufferCache)
+        {
+            return bufferCache.GetAsync(key, state, deserializer, token);
         }
         var pending = cache.GetAsync(key, token);
         if (!pending.IsCompletedSuccessfully) return Awaited(pending, state, deserializer);
 
         var arr = pending.GetAwaiter().GetResult();
-        return new(deserializer(state, arr is not null, arr));
+        return arr is null ? default : new(deserializer(state, new(arr)));
 
-        static async ValueTask<TValue> Awaited(Task<byte[]?> pending, TState state, Deserializer<TState, TValue> deserializer)
+        static async ValueTask<TValue?> Awaited(Task<byte[]?> pending, TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
         {
             var arr = await pending;
-            return deserializer(state, arr is not null, arr);
+            return arr is null ? default : deserializer(state, new(arr));
         }
     }
 
-    internal static ValueTask<TValue> GetAsync<TState, TValue>(this IExperimentalBufferCache cache, string key, in TState state, Deserializer<TState, TValue> deserializer, CancellationToken token = default)
+    private static ValueTask<TValue?> GetAsync<TState, TValue>(this IExperimentalBufferCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token = default)
     {
         var bw = new ArrayBufferWriter<byte>(); // TODO: recycling
         var pending = cache.GetAsync(key, bw, token);
         if (!pending.IsCompletedSuccessfully) return Awaited(pending, bw, state, deserializer);
 
-        return new(deserializer(state, pending.GetAwaiter().GetResult(), bw.WrittenSpan));
+        return pending.GetAwaiter().GetResult() ? new(deserializer(state, new(bw.WrittenMemory))) : default;
 
-        static async ValueTask<TValue> Awaited(ValueTask<bool> pending, ArrayBufferWriter<byte> bw, TState state, Deserializer<TState, TValue> deserializer)
+        static async ValueTask<TValue?> Awaited(ValueTask<bool> pending, ArrayBufferWriter<byte> bw, TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
         {
-            return deserializer(state, await pending, bw.WrittenSpan);
+            return await pending ? deserializer(state, new(bw.WrittenMemory)) : default;
         }
     }
 

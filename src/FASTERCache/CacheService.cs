@@ -20,7 +20,6 @@ internal sealed class CacheService
 
     internal CacheService(FASTERCacheOptions config, object? logger)
     {
-        SlidingExpiration = config.SlidingExpiration;
         var path = config.Directory;
         if (!Directory.Exists(path))
         {
@@ -42,8 +41,6 @@ internal sealed class CacheService
     }
 
     int _refCount = 1;
-
-    public bool SlidingExpiration { get; set; }
 
     public void AddRef()
     {

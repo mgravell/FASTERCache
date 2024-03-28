@@ -9,7 +9,6 @@ using NeoSmart.Caching.Sqlite.AspNetCore;
 using System;
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,7 +18,7 @@ namespace FASTERCache;
 public class CacheBenchmarks : IDisposable
 {
     private readonly IDistributedCache _faster, _sqlite;
-    private readonly IExperimentalBufferCache _fasterBuffer;
+    private readonly IFASTERDistributedCache _fasterBuffer;
 #if NET8_0_OR_GREATER
     private readonly IDistributedCache _rocks;
 #endif
@@ -67,7 +66,7 @@ public class CacheBenchmarks : IDisposable
         var services = new ServiceCollection();
         services.AddFASTERDistributedCache(options => options.Directory = "faster");
         _faster = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
-        _fasterBuffer = (IExperimentalBufferCache)_faster;
+        _fasterBuffer = (IFASTERDistributedCache)_faster;
 
         services = new ServiceCollection();
         services.AddSqliteCache(options => options.CachePath = @"sqlite.db", null!);
@@ -89,11 +88,15 @@ public class CacheBenchmarks : IDisposable
     }
 
     private int Get(IDistributedCache cache) => Assert(cache.Get(key));
-    private int GetNew(IExperimentalBufferCache cache)
+    private int GetBuffer(IExperimentalBufferCache cache)
     {
         using var bw = CountingBufferWriter.Create();
         return Assert(cache.Get(key, bw) ? bw.Count : -1);
     }
+
+    private int GetInPlace(IFASTERDistributedCache cache)
+        => cache.Get(key, 0, static (_, payload) => (int)payload.Length);
+
     private async ValueTask<int> GetAsync(IDistributedCache cache) => Assert(await cache.GetAsync(key));
 
     internal sealed class CountingBufferWriter : IBufferWriter<byte>, IDisposable
@@ -124,7 +127,7 @@ public class CacheBenchmarks : IDisposable
 
         public Span<byte> GetSpan(int sizeHint = 0) => _buffer;
     }
-    private ValueTask<int> GetAsyncNew(IExperimentalBufferCache cache)
+    private ValueTask<int> GetAsyncBuffer(IExperimentalBufferCache cache)
     {
         var bw = CountingBufferWriter.Create();
         var pending = cache.GetAsync(key, bw);
@@ -142,6 +145,9 @@ public class CacheBenchmarks : IDisposable
             }
         }
     }
+
+    private ValueTask<int> GetAsyncInPlace(IFASTERDistributedCache cache)
+        => cache.GetAsync(key, 0, static (_, payload) => (int)payload.Length);
 
     private int Assert(int length)
     {
@@ -166,7 +172,7 @@ public class CacheBenchmarks : IDisposable
         cache.Set(key, payload.ToArray(), Expiry);
     }
 
-    private void SetNew(IExperimentalBufferCache cache)
+    private void SetBuffer(IExperimentalBufferCache cache)
     {
         // scramble slightly each time
         payload.Span[payload.Length / 2]++;
@@ -183,7 +189,7 @@ public class CacheBenchmarks : IDisposable
 
     private static DistributedCacheEntryOptions Expiry = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
 
-    private async Task SetAsyncNew(IExperimentalBufferCache cache)
+    private async Task SetAsyncBuffer(IExperimentalBufferCache cache)
     {
         // scramble slightly each time
         payload.Span[payload.Length / 2]++;
@@ -198,20 +204,25 @@ public class CacheBenchmarks : IDisposable
     public void FASTER_Set() => Set(_faster);
 
     [Benchmark]
-    public int FASTER_GetBuffer() => GetNew(_fasterBuffer);
+    public int FASTER_GetBuffer() => GetBuffer(_fasterBuffer);
 
     [Benchmark]
-    public void FASTER_SetBuffer() => SetNew(_fasterBuffer);
+    public int FASTER_GetInPlace() => GetInPlace(_fasterBuffer);
+
+    [Benchmark]
+    public void FASTER_SetBuffer() => SetBuffer(_fasterBuffer);
 
     [Benchmark]
     public ValueTask<int> FASTER_GetAsync() => GetAsync(_faster);
     [Benchmark]
-    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsyncNew(_fasterBuffer);
+    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsyncBuffer(_fasterBuffer);
+    [Benchmark]
+    public ValueTask<int> FASTER_GetAsyncInPlace() => GetAsyncInPlace(_fasterBuffer);
 
     [Benchmark]
     public Task FASTER_SetAsync() => SetAsync(_faster);
     [Benchmark]
-    public Task FASTER_SetAsyncBuffer() => SetAsyncNew(_fasterBuffer);
+    public Task FASTER_SetAsyncBuffer() => SetAsyncBuffer(_fasterBuffer);
 
     [Benchmark]
     public int SQLite_Get() => Get(_sqlite);
