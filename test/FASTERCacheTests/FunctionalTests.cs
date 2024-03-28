@@ -79,7 +79,6 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     [Fact]
     public void BasicUsage()
     {
-        ResetStats();
         var key = Caller();
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();

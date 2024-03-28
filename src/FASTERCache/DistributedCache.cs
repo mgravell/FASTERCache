@@ -239,7 +239,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 }
                 else
                 {
-                    Interlocked.Increment(ref status.Expired ? ref _syncMissExpired : ref _asyncMissBasic);
+                    Interlocked.Increment(ref status.Expired ? ref _syncMissExpired : ref _syncMissBasic);
                 }
                 if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
                 {
@@ -281,11 +281,28 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 Output output = default;
                 var status = session.RMW(ref fixedKey, ref input, ref output);
                 if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
-                if (status.IsCompletedSuccessfully && status.Found)
-                {
-                    finalResult = selector(output);
-                }
+                
                 Debug.WriteLine($"RMW: {status}");
+                if (status.IsCompletedSuccessfully) // TODO mask optimize all states
+                {
+                    if (status.Found && !status.Expired)
+                    {
+                        finalResult = selector(output);
+                        Interlocked.Increment(ref _syncHit);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref status.Expired ? ref _syncMissExpired : ref _syncMissBasic);
+                    }
+                    if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
+                    {
+                        Interlocked.Increment(ref _copyUpdate);
+                    }
+                }
+                else
+                {
+                    Interlocked.Increment(ref _fault);
+                }
             }
             ReturnLease(lease);
             ReuseSession(session);
@@ -293,6 +310,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
         catch
         {
+            Interlocked.Increment(ref _fault);
             FaultSession(session);
             throw;
         }
