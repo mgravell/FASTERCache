@@ -11,8 +11,16 @@ using Xunit.Abstractions;
 
 namespace FASTERCache;
 
-public class FunctionalTests(FunctionalTests.CacheInstance fixture, ITestOutputHelper log) : IClassFixture<FunctionalTests.CacheInstance>
+public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 {
+    public FunctionalTests(CacheInstance fixture, ITestOutputHelper log)
+    {
+        this.log = log;
+        this.fixture = fixture;
+        ResetStats();
+    }
+    private readonly CacheInstance fixture;
+    private readonly ITestOutputHelper log;
     private IDistributedCache Cache => fixture.Cache;
     private IExperimentalBufferCache BufferCache => fixture.BufferCache;
     private const int PageSizeBits = 12;
@@ -71,6 +79,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture, ITestOutputH
     [Fact]
     public void BasicUsage()
     {
+        ResetStats();
         var key = Caller();
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
@@ -301,7 +310,10 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture, ITestOutputH
         }
         WriteStats();
     }
-
+    private void ResetStats()
+    {
+        if (Cache is DistributedCache dc) dc.ResetStats();
+    }
     private void WriteStats()
     {
         if (Cache is DistributedCache dc)
@@ -311,6 +323,7 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture, ITestOutputH
             log.WriteLine($"Sync: {dc.TotalSync}");
             log.WriteLine($"Async: {dc.TotalAsync}");
             log.WriteLine($"Copy-Update: {dc.TotalCopyUpdate}");
+            log.WriteLine($"Fault: {dc.TotalFault}");
         }
     }
 }

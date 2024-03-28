@@ -71,7 +71,20 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
     // counters are optimized to be cheap to update; read is much rarer
+
+    public void ResetStats()
+    {
+        Volatile.Write(ref _syncHit, 0);
+        Volatile.Write(ref _asyncHit, 0);
+        Volatile.Write(ref _syncMissBasic, 0);
+        Volatile.Write(ref _syncMissExpired, 0);
+        Volatile.Write(ref _asyncMissBasic, 0);
+        Volatile.Write(ref _asyncMissExpired, 0);
+        Volatile.Write(ref _copyUpdate, 0);
+        Volatile.Write(ref _fault, 0);
+    }
     public long TotalHit => Volatile.Read(ref _syncHit) + Volatile.Read(ref _asyncHit);
+    public long TotalFault => Volatile.Read(ref _fault);
     public long TotalMiss => Volatile.Read(ref _syncMissBasic) + Volatile.Read(ref _asyncMissBasic)
         + Volatile.Read(ref _syncMissExpired) + Volatile.Read(ref _asyncMissExpired);
 
