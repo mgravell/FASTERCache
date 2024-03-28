@@ -311,10 +311,13 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     }
     private void ResetStats()
     {
-        if (Cache is DistributedCache dc) dc.ResetStats();
+#if DEBUG
+        if (Cache is DistributedCache dc) dc.ResetCounters();
+#endif
     }
     private void WriteStats()
     {
+#if DEBUG
         if (Cache is DistributedCache dc)
         {
             log.WriteLine($"Hit: {dc.TotalHit}");
@@ -324,5 +327,6 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
             log.WriteLine($"Copy-Update: {dc.TotalCopyUpdate}");
             log.WriteLine($"Fault: {dc.TotalFault}");
         }
+#endif
     }
 }

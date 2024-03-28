@@ -70,33 +70,6 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         return new(lease, 0, length);
     }
 
-    // counters are optimized to be cheap to update; read is much rarer
-
-    public void ResetStats()
-    {
-        Volatile.Write(ref _syncHit, 0);
-        Volatile.Write(ref _asyncHit, 0);
-        Volatile.Write(ref _syncMissBasic, 0);
-        Volatile.Write(ref _syncMissExpired, 0);
-        Volatile.Write(ref _asyncMissBasic, 0);
-        Volatile.Write(ref _asyncMissExpired, 0);
-        Volatile.Write(ref _copyUpdate, 0);
-        Volatile.Write(ref _fault, 0);
-    }
-    public long TotalHit => Volatile.Read(ref _syncHit) + Volatile.Read(ref _asyncHit);
-    public long TotalFault => Volatile.Read(ref _fault);
-    public long TotalMiss => Volatile.Read(ref _syncMissBasic) + Volatile.Read(ref _asyncMissBasic)
-        + Volatile.Read(ref _syncMissExpired) + Volatile.Read(ref _asyncMissExpired);
-
-    public long TotalSync => Volatile.Read(ref _syncHit) + Volatile.Read(ref _syncMissBasic) + Volatile.Read(ref _syncMissExpired);
-
-    public long TotalAsync => Volatile.Read(ref _asyncHit) + Volatile.Read(ref _asyncMissBasic) + Volatile.Read(ref _asyncMissExpired);
-    public long TotalCopyUpdate => Volatile.Read(ref _copyUpdate);
-    public long TotalMissExpired => Volatile.Read(ref _syncMissExpired) + Volatile.Read(ref _asyncMissExpired);
-
-    const byte StatusInPlaceUpdatedRecord = 0x20, StatusCopyUpdatedRecord = 0x30, // see Status.StatusCode internals
-        StatusRMWMask = StatusInPlaceUpdatedRecord | StatusCopyUpdatedRecord;
-
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ValueTask<TResult?> AsyncTransitionGet<TResult>(ref GetAsyncState<TResult> state, int step)
     {
@@ -121,7 +94,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 status = state.RmwResult.Status;
                 output = state.RmwResult.Output;
                 if (!status.IsPending) goto RmwIsComplete;
-            CompleteIncompleteRmw:
+                CompleteIncompleteRmw:
                 // WHY NO CompletePendingAsync <== (from search? this one)
                 // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
                 // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
@@ -129,26 +102,10 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 // await state.Session.CompletePendingAsync(token: state.Token);
                 (status, output) = state.RmwResult.Complete();
             RmwIsComplete:
-                Debug.WriteLine($"RMW: {status}");
-                if (status.IsCompletedSuccessfully) // TODO mask optimize all states
+                @this.OnDebugReadComplete(status, async: true);
+                if (IsReadHit(status.Value))
                 {
-                    if (status.Found && !status.Expired)
-                    {
-                        state.FinalResult = state.Selector(output);
-                        Interlocked.Increment(ref @this._asyncHit);
-                    }
-                    else
-                    {
-                        Interlocked.Increment(ref status.Expired ? ref @this._asyncMissExpired : ref @this._asyncMissBasic);
-                    }
-                    if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
-                    {
-                        Interlocked.Increment(ref @this._copyUpdate);
-                    }
-                }
-                else
-                {
-                    Interlocked.Increment(ref @this._fault);
+                    state.FinalResult = state.Selector(output);
                 }
 
                 @this.ReuseSession(state.Session);
@@ -156,11 +113,36 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             }
             catch
             {
-                Interlocked.Increment(ref @this._fault);
+                @this.OnDebugFault();
                 FaultSession(state.Session);
                 throw;
             }
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsReadHit(byte status)
+    {
+        const byte BasicMask = 0xF, Expired = 0x80;
+
+        return (status & (BasicMask | Expired)) == 0;
+        /*
+        what we want here is: status.IsCompletedSuccessfully && status.Found && !status.Expired,
+        but obviously, in one hit
+
+        IsCompletedSuccessfully:
+            StatusCode statusCode = this.statusCode & StatusCode.BasicMask;
+            if (statusCode != StatusCode.Pending)
+            {
+                return statusCode != StatusCode.Error;
+            }
+        Found:
+            (Record.statusCode & StatusCode.BasicMask) == 0;
+        Expired:
+            (statusCode & StatusCode.Expired) == StatusCode.Expired;
+
+        so: Found already excludes pending/error, which is nice; that leaves Expired
+        */
     }
 
     static bool Force() => true;
@@ -229,39 +211,23 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             {
                 return AsyncTransitionGet(ref state, 1);
             }
-            Debug.WriteLine($"RMW: {status}");
-            if (status.IsCompletedSuccessfully) // TODO mask optimize all states
+
+            OnDebugReadComplete(status, async: false);
+            if (IsReadHit(status.Value))
             {
-                if (status.Found && !status.Expired)
-                {
-                    state.FinalResult = state.Selector(output);
-                    Interlocked.Increment(ref _syncHit);
-                }
-                else
-                {
-                    Interlocked.Increment(ref status.Expired ? ref _syncMissExpired : ref _syncMissBasic);
-                }
-                if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
-                {
-                    Interlocked.Increment(ref _copyUpdate);
-                }
-            }
-            else
-            {
-                Interlocked.Increment(ref _fault);
+                state.FinalResult = state.Selector(output);
             }
             ReuseSession(state.Session);
             return new(state.FinalResult);
         }
         catch
         {
-            Interlocked.Increment(ref _fault);
+            OnDebugFault();
             FaultSession(state.Session);
             throw;
         }
     }
 
-    private long _syncHit, _syncMissBasic, _syncMissExpired, _asyncHit, _asyncMissBasic, _asyncMissExpired, _fault, _copyUpdate;
     const int MAX_STACKALLOC = 128;
 
     private unsafe TResult? Get<TResult>(string key, bool readArray, Func<Output, TResult> selector, IBufferWriter<byte>? bufferWriter = null)
@@ -281,27 +247,11 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 Output output = default;
                 var status = session.RMW(ref fixedKey, ref input, ref output);
                 if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
-                
-                Debug.WriteLine($"RMW: {status}");
-                if (status.IsCompletedSuccessfully) // TODO mask optimize all states
+
+                OnDebugReadComplete(status, async: false);
+                if (IsReadHit(status.Value))
                 {
-                    if (status.Found && !status.Expired)
-                    {
-                        finalResult = selector(output);
-                        Interlocked.Increment(ref _syncHit);
-                    }
-                    else
-                    {
-                        Interlocked.Increment(ref status.Expired ? ref _syncMissExpired : ref _syncMissBasic);
-                    }
-                    if ((status.Value & StatusRMWMask) == StatusCopyUpdatedRecord)
-                    {
-                        Interlocked.Increment(ref _copyUpdate);
-                    }
-                }
-                else
-                {
-                    Interlocked.Increment(ref _fault);
+                    finalResult = selector(output);
                 }
             }
             ReturnLease(lease);
@@ -310,7 +260,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
         catch
         {
-            Interlocked.Increment(ref _fault);
+            OnDebugFault();
             FaultSession(session);
             throw;
         }
