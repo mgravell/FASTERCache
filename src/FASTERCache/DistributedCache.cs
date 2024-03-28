@@ -1,51 +1,40 @@
 ﻿using FASTER.core;
 using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Internal;
+using Microsoft.Extensions.Options;
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using BooleanSession = FASTER.core.ClientSession<FASTER.core.SpanByte, FASTER.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, bool, FASTER.core.Empty, FASTERCache.DistributedCache.BooleanFunctions>;
+using ByteArraySession = FASTER.core.ClientSession<FASTER.core.SpanByte, FASTER.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, byte[], FASTER.core.Empty, FASTERCache.DistributedCache.ByteArrayFunctions>;
 
 namespace FASTERCache;
 
 /// <summary>
 /// Implements IDistributedCache
 /// </summary>
-internal sealed partial class DistributedCache : CacheBase<DistributedCache.Input, DistributedCache.Output, Empty, DistributedCache.CacheFunctions>, IDistributedCache, IDisposable, IExperimentalBufferCache
+internal sealed partial class DistributedCache : CacheBase,
+    IFASTERDistributedCache, IDisposable
 {
+    public bool SlidingExpiration { get; set; }
     protected override byte KeyPrefix => (byte)'D';
 
     // heavily influenced by https://github.com/microsoft/FASTER/blob/main/cs/samples/CacheStore/
 
-    public DistributedCache(CacheService cacheService, IServiceProvider services)
-        : this(cacheService, GetClock(services))
+    public DistributedCache(CacheService cacheService, IServiceProvider services, IOptions<FASTERCacheOptions> options)
+        : this(options.Value, cacheService, GetClockObject(services))
     { }
 
-    static object? GetClock(IServiceProvider services)
+
+    internal DistributedCache(FASTERCacheOptions options, CacheService cacheService, object? clock) : base(cacheService, clock)
     {
-#if NET8_0_OR_GREATER
-        if (services.GetService<TimeProvider>() is { } time)
-        {
-            return time;
-        }
-#endif
-        return services.GetService<ISystemClock>();
+        SlidingExpiration = options.SlidingExpiration;
     }
-
-    internal DistributedCache(CacheService cacheService, object? clock) : base(cacheService, clock switch
-    {
-#if NET8_0_OR_GREATER
-        TimeProvider timeProvider => CacheFunctions.Create(timeProvider),
-#endif
-        ISystemClock systemClock => CacheFunctions.Create(systemClock),
-        _ => CacheFunctions.Create()
-    })
-    { }
 
     const int MAX_STACKALLOC_SIZE = 128;
 
@@ -86,19 +75,38 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     static bool Force() => true;
 
-    private ValueTask<TResult?> GetAsync<TResult>(string key, IBufferWriter<byte>? bufferWriter, bool readArray, Func<Output, TResult> selector, CancellationToken token)
+    private ValueTask<TOutput?> GetAsync<TInput, TOutput, TFunction>(
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+        TFunction functions,
+        string key, ref TInput input, CancellationToken token)
+        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+        => SlidingExpiration
+        ? RMWAsync(sessions, functions, key, ref input, token)
+        : ReadAsync(sessions, functions, key, ref input, token);
+
+    private ConcurrentBag<ByteArraySession> _byteArraySessions = [];
+    private ConcurrentBag<BooleanSession> _booleanSessions = [];
+    private BooleanSession GetBooleanSession() => GetSession(_booleanSessions, BooleanFunctions.Instance);
+
+    private void ReuseSession(ByteArraySession session) => ReuseSession(_byteArraySessions, session);
+    private void ReuseSession(BooleanSession session) => ReuseSession(_booleanSessions, session);
+
+    private ValueTask<TOutput?> RMWAsync<TInput, TOutput, TFunction>(
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+        TFunction functions,
+        string key, ref TInput input, CancellationToken token)
+        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
     {
-        var session = GetSession();
+        var session = GetSession(sessions, functions);
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> pendingRmwResult;
+            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
                 {
                     var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                    var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
                     pendingRmwResult = session.RMWAsync(ref fixedKey, ref input, token: token);
                     DebugWipe(keySpan);
                 }
@@ -107,7 +115,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
             if (!pendingRmwResult.IsCompletedSuccessfully)
             {
-                return Awaited(this, session, pendingRmwResult, selector);
+                return Awaited(this, session, sessions, pendingRmwResult);
             }
             var rmwResult = pendingRmwResult.GetAwaiter().GetResult();
 
@@ -124,9 +132,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             }
             Assert(status, nameof(session.RMWAsync));
             OnDebugRMWComplete(status, async: false);
-            TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
-            ReuseSession(session);
-            return new(finalResult);
+            ReuseSession(sessions, session);
+            return new(output);
         }
         catch
         {
@@ -134,10 +141,10 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             FaultSession(session);
             throw;
         }
-        static async ValueTask<TResult?> Awaited(DistributedCache @this,
-            ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
-            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<Input, Output, Empty>> pendingRmwResult,
-            Func<Output, TResult> selector
+        static async ValueTask<TOutput?> Awaited(DistributedCache @this,
+            ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction> session,
+            ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
             )
         {
             try
@@ -157,9 +164,93 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 }
                 Assert(status, nameof(session.RMWAsync));
                 @this.OnDebugRMWComplete(status, async: false);
-                TResult? finalResult = IsReadHit(status.Value) ? selector(output) : default;
-                @this.ReuseSession(session);
-                return finalResult;
+                ReuseSession(sessions, session);
+                return output;
+            }
+            catch
+            {
+                @this.OnDebugFault();
+                FaultSession(session);
+                throw;
+            }
+        }
+    }
+
+    private ValueTask<TOutput?> ReadAsync<TInput, TOutput, TFunction>(
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+        TFunction functions,
+        string key, ref TInput input, CancellationToken token)
+        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+    {
+        var session = GetSession(sessions, functions);
+        try
+        {
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
+            ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingReadResult;
+            unsafe
+            {
+                fixed (byte* keyPtr = keySpan)
+                {
+                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
+                    pendingReadResult = session.ReadAsync(fixedKey, input, token: token);
+                    DebugWipe(keySpan);
+                }
+            }
+            ReturnLease(ref lease);
+
+            if (!pendingReadResult.IsCompletedSuccessfully)
+            {
+                return Awaited(this, session, sessions, pendingReadResult);
+            }
+            var rmwResult = pendingReadResult.GetAwaiter().GetResult();
+
+            var status = rmwResult.Status;
+            var output = rmwResult.Output;
+            if (status.IsPending)
+            {
+                // WHY NO CompletePendingAsync <== (from search? this one)
+                // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
+                // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
+                // tl;dr: we should not need CompletePendingAsync
+                // await state.Session.CompletePendingAsync(token: state.Token);
+                (status, output) = rmwResult.Complete();
+            }
+            Assert(status, nameof(session.ReadAsync));
+            OnDebugRMWComplete(status, async: false);
+            ReuseSession(sessions, session);
+            return new(output);
+        }
+        catch
+        {
+            OnDebugFault();
+            FaultSession(session);
+            throw;
+        }
+        static async ValueTask<TOutput?> Awaited(DistributedCache @this,
+            ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction> session,
+            ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+            ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
+            )
+        {
+            try
+            {
+                var rmwResult = await pendingRmwResult;
+
+                var status = rmwResult.Status;
+                var output = rmwResult.Output;
+                if (status.IsPending)
+                {
+                    // WHY NO CompletePendingAsync <== (from search? this one)
+                    // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
+                    // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
+                    // tl;dr: we should not need CompletePendingAsync
+                    // await state.Session.CompletePendingAsync(token: state.Token);
+                    (status, output) = rmwResult.Complete();
+                }
+                Assert(status, nameof(session.ReadAsync));
+                @this.OnDebugRMWComplete(status, async: false);
+                ReuseSession(sessions, session);
+                return output;
             }
             catch
             {
@@ -172,34 +263,34 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     const int MAX_STACKALLOC = 128;
 
-    private unsafe TResult? Get<TResult>(string key, bool readArray, Func<Output, TResult> selector, IBufferWriter<byte>? bufferWriter = null)
+    private unsafe TOutput? Get<TInput, TOutput, TFunction>(
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+        TFunction functions,
+        string key, ref TInput input)
+        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
     {
-        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-
-        TResult? finalResult = default;
-        var session = GetSession();
+        var session = GetSession(sessions, functions);
         try
         {
+            TOutput? output = default!;
             Status status;
-            Output output = default;
+            var sliding = SlidingExpiration;
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             fixed (byte* keyPtr = keySpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
-                status = session.RMW(ref fixedKey, ref input, ref output);
+                status = sliding
+                    ? session.RMW(ref fixedKey, ref input, ref output)
+                    : session.Read(ref fixedKey, ref input, ref output);
                 DebugWipe(keySpan);
             }
             ReturnLease(ref lease);
             if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
 
-            Assert(status, nameof(session.RMW));
+            Assert(status, sliding ? nameof(session.RMW) : nameof(session.Read));
             OnDebugRMWComplete(status, async: false);
-            if (IsReadHit(status.Value))
-            {
-                finalResult = selector(output);
-            }
-            ReuseSession(session);
-            return finalResult;
+            ReuseSession(sessions, session);
+            return output;
         }
         catch
         {
@@ -209,22 +300,45 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
     }
 
-    byte[]? IDistributedCache.Get(string key) => Get(key, readArray: true, selector: x => x.Payload);
+    private BasicInputContext BasicInput(IBufferWriter<byte>? target = null) => new(Clock.NowTicks, target);
 
-    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: true, selector: static x => x.Payload, token: token).AsTask();
+    byte[]? IDistributedCache.Get(string key)
+    {
+        var input = BasicInput();
+        return Get(_byteArraySessions, ByteArrayFunctions.Instance, key, ref input);
+    }
 
-    unsafe void IDistributedCache.Refresh(string key) => Get(key, readArray: false, selector: x => true);
+    Task<byte[]?> IDistributedCache.GetAsync(string key, CancellationToken token) {
+        var input = BasicInput();
+        return GetAsync(_byteArraySessions, ByteArrayFunctions.Instance, key, ref input, token).AsTask();
+    }
 
-    Task IDistributedCache.RefreshAsync(string key, CancellationToken token) => GetAsync(key, bufferWriter: null, readArray: false, selector: static _ => true, token: token).AsTask();
+    unsafe void IDistributedCache.Refresh(string key)
+    {
+        var input = BasicInput();
+        Get(_booleanSessions, BooleanFunctions.Instance, key, ref input);
+    }
+
+    Task IDistributedCache.RefreshAsync(string key, CancellationToken token)
+    {
+        var input = BasicInput();
+        var pending = GetAsync(_booleanSessions, BooleanFunctions.Instance, key, ref input, token);
+        if (pending.IsCompletedSuccessfully)
+        {
+            pending.GetAwaiter().GetResult(); // ensure consumed
+            return Task.CompletedTask;
+        }
+        // error, async, etc
+        return pending.AsTask();
+    }
 
     unsafe void IDistributedCache.Remove(string key)
     {
-        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-
-        var session = GetSession();
+        var session = GetBooleanSession();
         try
         {
             Status status;
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             fixed (byte* ptr = keySpan)
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
@@ -234,8 +348,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             ReturnLease(ref lease);
             if (status.IsPending)
             {
-                Output dummy;
-                Unsafe.SkipInit(out dummy);
+                bool dummy = false;
                 CompleteSinglePending(session, ref status, ref dummy);
             }
             Assert(status, nameof(session.Delete));
@@ -251,11 +364,11 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     Task IDistributedCache.RemoveAsync(string key, CancellationToken token)
     {
-        var session = GetSession();
+        var session = GetBooleanSession();
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<Input, Output, Empty>> pendingDeleteResult;
+            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
@@ -291,8 +404,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
 
         static async Task Awaited(DistributedCache @this,
-            ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
-            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<Input, Output, Empty>> pendingDeleteResult)
+            BooleanSession session,
+            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult)
         {
             try
             {
@@ -317,11 +430,10 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     }
 
-    private long NowTicks => base.Functions.NowTicks;
-
     private long GetExpiryTicks(DistributedCacheEntryOptions? options, out int sliding)
     {
         sliding = 0;
+        var now = Clock.NowTicks;
         if (options is not null)
         {
             if (options.SlidingExpiration is not null)
@@ -334,14 +446,14 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             }
             if (options.AbsoluteExpirationRelativeToNow is not null)
             {
-                return NowTicks + options.AbsoluteExpirationRelativeToNow.GetValueOrDefault().Ticks;
+                return now + options.AbsoluteExpirationRelativeToNow.GetValueOrDefault().Ticks;
             }
             if (sliding != 0)
             {
-                return NowTicks + sliding;
+                return now + sliding;
             }
         }
-        return NowTicks + OneMinuteTicks;
+        return now + OneMinuteTicks;
     }
 
     private static readonly long OneMinuteTicks = TimeSpan.FromMinutes(1).Ticks;
@@ -351,13 +463,13 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     unsafe void Write(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
     {
-        var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var keyLease);
-        var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default,
-            value, out var valueLease, options);
-
-        var session = GetSession();
+        var session = GetBooleanSession();
         try
         {
+            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var keyLease);
+            var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default,
+                value, out var valueLease, options);
+
             Status status;
             fixed (byte* keyPtr = keySpan)
             fixed (byte* valuePtr = valueSpan)
@@ -373,8 +485,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
             if (status.IsPending)
             {
-                Output dummy;
-                Unsafe.SkipInit(out dummy);
+                bool dummy = false;
                 CompleteSinglePending(session, ref status, ref dummy);
             }
             Assert(status, nameof(session.Upsert));
@@ -399,12 +510,12 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
 
     ValueTask WriteAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
     {
-        var session = GetSession();
+        var session = GetBooleanSession();
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default, value, out var valueLease, options);
-            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> pendingUpsertResult;
+            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
@@ -444,8 +555,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
         }
 
         static async ValueTask Awaited(DistributedCache @this,
-            ClientSession<SpanByte, SpanByte, Input, Output, Empty, CacheFunctions> session,
-            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<Input, Output, Empty>> pendingUpsertResult
+            BooleanSession session,
+            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult
             )
         {
             try
@@ -471,14 +582,107 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
     }
 
     ValueTask<bool> IExperimentalBufferCache.GetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
-        => GetAsync(key, bufferWriter: target, readArray: false, token: token, selector: static _ => true);
+    {
+        var input = BasicInput(target);
+        return GetAsync(_booleanSessions, BooleanFunctions.Instance, key, ref input, token);
+    }
 
     ValueTask IExperimentalBufferCache.SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
         => WriteAsync(key, value, options, token);
 
     bool IExperimentalBufferCache.Get(string key, IBufferWriter<byte> target)
-        => Get(key, bufferWriter: target, readArray: false, selector: static _ => true);
+    {
+        var input = BasicInput(target);
+        return Get(_booleanSessions, BooleanFunctions.Instance, key, ref input);
+    }
 
     void IExperimentalBufferCache.Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
         => Write(key, value, options);
+
+
+    private ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>> GetSessionBag<TInput, TOutput, TFunctions>()
+        where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+        where TInput : struct, IInputTime
+    {
+        var key = (typeof(TInput), typeof(TOutput), typeof(TFunctions));
+        if (_bags.TryGetValue(key, out var found))
+        {
+            return (ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>>)found;
+        }
+        
+        var newObj = new ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>>();
+        _bags[key] = newObj;
+        return newObj;
+    }
+
+    private readonly ConcurrentDictionary<(Type, Type, Type), object> _bags = new();
+
+
+    readonly struct InPlaceReadInput<TState, TValue> : IInputTime
+    {
+        public InPlaceReadInput(long nowTicks, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
+        {
+            State = state;
+            Deserializer = deserializer;
+            NowTicks = nowTicks;
+        }
+        public long NowTicks { get; }
+        public readonly TState State;
+        public readonly Func<TState, ReadOnlySequence<byte>, TValue> Deserializer;
+
+        public class Functions : CacheFunctions<InPlaceReadInput<TState, TValue>, TValue>
+        {
+            private Functions() { }
+            public static readonly Functions Instance = new Functions();
+            protected override void Read(ref InPlaceReadInput<TState, TValue> input, ReadOnlySpan<byte> payload, ref TValue output)
+            {
+                var mgr = UnsafeMemoryManager.Create(payload);
+                output = input.Deserializer(input.State, new(mgr.Memory));
+                mgr.Return();
+            }
+        }
+    }
+
+    public unsafe class UnsafeMemoryManager : MemoryManager<byte>
+    {
+        private static readonly ConcurrentBag<UnsafeMemoryManager> spares = new();
+        private UnsafeMemoryManager() { }
+        public static UnsafeMemoryManager Create(ReadOnlySpan<byte> fixedSpan)
+        {
+            if (!spares.TryTake(out var found)) found = new();
+            found.ptr = Unsafe.AsPointer(ref MemoryMarshal.GetReference(fixedSpan));
+            found.length = fixedSpan.Length;
+            return found;
+        }
+        public void Return()
+        {
+            const int APPROX_MAX_SPARES = 32;
+            length = 0;
+            ptr = null;
+            if (spares.Count < APPROX_MAX_SPARES)
+            {
+                spares.Add(this);
+            }
+        }
+        private void* ptr;
+        private int length;
+        public override Span<byte> GetSpan() => MemoryMarshal.CreateSpan(ref Unsafe.AsRef<byte>(ptr), length);
+        protected override void Dispose(bool disposing) { }
+        public override MemoryHandle Pin(int elementIndex = 0) => new((byte*)ptr + elementIndex);
+        public override void Unpin() { }
+
+    }
+    TValue? IFASTERDistributedCache.Get<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer) where TValue : default
+    {
+        var sessions = GetSessionBag<InPlaceReadInput<TState, TValue>, TValue, InPlaceReadInput<TState, TValue>.Functions>();
+        var input = new InPlaceReadInput<TState, TValue>(Clock.NowTicks, in state, deserializer);
+        return Get(sessions, InPlaceReadInput<TState, TValue>.Functions.Instance, key, ref input);
+    }
+
+    ValueTask<TValue?> IFASTERDistributedCache.GetAsync<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token) where TValue : default
+    {
+        var sessions = GetSessionBag<InPlaceReadInput<TState, TValue>, TValue, InPlaceReadInput<TState, TValue>.Functions>();
+        var input = new InPlaceReadInput<TState, TValue>(Clock.NowTicks, in state, deserializer);
+        return GetAsync(sessions, InPlaceReadInput<TState, TValue>.Functions.Instance, key, ref input, token);
+    }
 }

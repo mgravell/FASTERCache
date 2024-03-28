@@ -41,6 +41,7 @@ internal sealed class CacheService
     }
 
     int _refCount = 1;
+
     public void AddRef()
     {
         lock(this)

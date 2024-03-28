@@ -15,6 +15,11 @@ FASTERCache.FASTERCacheOptions.FASTERCacheOptions() -> void
 FASTERCache.FASTERCacheOptions.LogCapacity.get -> long
 FASTERCache.FASTERCacheOptions.LogCapacity.set -> void
 FASTERCache.FASTERCacheOptions.LogSettings.get -> FASTER.core.LogSettings!
+FASTERCache.FASTERCacheOptions.SlidingExpiration.get -> bool
+FASTERCache.FASTERCacheOptions.SlidingExpiration.set -> void
 Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions
 static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.AddFASTERCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FASTERCache.FASTERCacheOptions!>! setupAction) -> void
 static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.AddFASTERDistributedCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<FASTERCache.FASTERCacheOptions!>? setupAction = null) -> void
+static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.GetAsync<TState, TValue>(this Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, string! key, in TState state, FASTERCache.Deserializer<TState, TValue>! deserializer, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<TValue>
+static Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions.Get<TState, TValue>(this Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, string! key, in TState state, FASTERCache.Deserializer<TState, TValue>! deserializer) -> TValue
+FASTERCache.Deserializer<TState, TValue>

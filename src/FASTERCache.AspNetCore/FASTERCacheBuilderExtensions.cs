@@ -7,5 +7,5 @@ namespace FASTERCache;
 /// </summary>
 public static class FASTERCacheBuilderExtensions
 {
-    public static IOutputCacheStore CreateOutputCacheStore(this FASTERCacheBuilder builder) => new OutputCacheStore(builder.GetCacheService());
+    public static IOutputCacheStore CreateOutputCacheStore(this FASTERCacheBuilder builder) => new OutputCacheStore(builder.GetCacheService(), builder.Clock);
 }

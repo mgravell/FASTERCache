@@ -9,7 +9,6 @@ using NeoSmart.Caching.Sqlite.AspNetCore;
 using System;
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,10 +18,19 @@ namespace FASTERCache;
 public class CacheBenchmarks : IDisposable
 {
     private readonly IDistributedCache _faster, _sqlite;
-    private readonly IExperimentalBufferCache _fasterBuffer;
+    private readonly IFASTERDistributedCache _fasterBuffer;
 #if NET8_0_OR_GREATER
     private readonly IDistributedCache _rocks;
 #endif
+#if REDIS
+    private readonly IDistributedCache _redis;
+#endif
+#if GARNET
+    private readonly IDistributedCache _garnet;
+#endif
+
+    // [Params(true, false)]
+    public bool Sliding { get; set; } = true;
 
     [Params(128)]
     public int KeyLength { get; set; } = 20;
@@ -54,17 +62,32 @@ public class CacheBenchmarks : IDisposable
 #if NET8_0_OR_GREATER
         _rocks.Set(key, finalArr);
 #endif
+        if (_faster is DistributedCache dc)
+        {
+            dc.SlidingExpiration = Sliding;
+        }
     }
     public CacheBenchmarks()
     {
         var services = new ServiceCollection();
         services.AddFASTERDistributedCache(options => options.Directory = "faster");
         _faster = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
-        _fasterBuffer = (IExperimentalBufferCache)_faster;
+        _fasterBuffer = (IFASTERDistributedCache)_faster;
 
         services = new ServiceCollection();
         services.AddSqliteCache(options => options.CachePath = @"sqlite.db", null!);
         _sqlite = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
+
+#if REDIS
+        services = new ServiceCollection();
+        services.AddStackExchangeRedisCache(options => options.Configuration = "127.0.0.1:6379");
+        _redis = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
+#endif
+#if GARNET
+        services = new ServiceCollection();
+        services.AddStackExchangeRedisCache(options => options.Configuration = "127.0.0.1:3278");
+        _garnet = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
+#endif
 
 #if NET8_0_OR_GREATER
         _rocks = new FusionRocks.FusionRocks(new FusionRocksOptions { CachePath = "rocks" });
@@ -79,14 +102,25 @@ public class CacheBenchmarks : IDisposable
 #if NET8_0_OR_GREATER
         (_rocks as IDisposable)?.Dispose();
 #endif
+#if REDIS
+        (_redis as IDisposable)?.Dispose();
+#endif
+#if GARNET
+        (_garnet as IDisposable)?.Dispose();
+#endif
+
     }
 
     private int Get(IDistributedCache cache) => Assert(cache.Get(key));
-    private int GetNew(IExperimentalBufferCache cache)
+    private int GetBuffer(IExperimentalBufferCache cache)
     {
         using var bw = CountingBufferWriter.Create();
         return Assert(cache.Get(key, bw) ? bw.Count : -1);
     }
+
+    private int GetInPlace(IFASTERDistributedCache cache)
+        => cache.Get(key, 0, static (_, payload) => (int)payload.Length);
+
     private async ValueTask<int> GetAsync(IDistributedCache cache) => Assert(await cache.GetAsync(key));
 
     internal sealed class CountingBufferWriter : IBufferWriter<byte>, IDisposable
@@ -117,7 +151,7 @@ public class CacheBenchmarks : IDisposable
 
         public Span<byte> GetSpan(int sizeHint = 0) => _buffer;
     }
-    private ValueTask<int> GetAsyncNew(IExperimentalBufferCache cache)
+    private ValueTask<int> GetAsyncBuffer(IExperimentalBufferCache cache)
     {
         var bw = CountingBufferWriter.Create();
         var pending = cache.GetAsync(key, bw);
@@ -135,6 +169,9 @@ public class CacheBenchmarks : IDisposable
             }
         }
     }
+
+    private ValueTask<int> GetAsyncInPlace(IFASTERDistributedCache cache)
+        => cache.GetAsync(key, 0, static (_, payload) => (int)payload.Length);
 
     private int Assert(int length)
     {
@@ -159,7 +196,7 @@ public class CacheBenchmarks : IDisposable
         cache.Set(key, payload.ToArray(), Expiry);
     }
 
-    private void SetNew(IExperimentalBufferCache cache)
+    private void SetBuffer(IExperimentalBufferCache cache)
     {
         // scramble slightly each time
         payload.Span[payload.Length / 2]++;
@@ -176,7 +213,7 @@ public class CacheBenchmarks : IDisposable
 
     private static DistributedCacheEntryOptions Expiry = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
 
-    private async Task SetAsyncNew(IExperimentalBufferCache cache)
+    private async Task SetAsyncBuffer(IExperimentalBufferCache cache)
     {
         // scramble slightly each time
         payload.Span[payload.Length / 2]++;
@@ -191,20 +228,25 @@ public class CacheBenchmarks : IDisposable
     public void FASTER_Set() => Set(_faster);
 
     [Benchmark]
-    public int FASTER_GetBuffer() => GetNew(_fasterBuffer);
+    public int FASTER_GetBuffer() => GetBuffer(_fasterBuffer);
 
     [Benchmark]
-    public void FASTER_SetBuffer() => SetNew(_fasterBuffer);
+    public int FASTER_GetInPlace() => GetInPlace(_fasterBuffer);
+
+    [Benchmark]
+    public void FASTER_SetBuffer() => SetBuffer(_fasterBuffer);
 
     [Benchmark]
     public ValueTask<int> FASTER_GetAsync() => GetAsync(_faster);
     [Benchmark]
-    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsyncNew(_fasterBuffer);
+    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsyncBuffer(_fasterBuffer);
+    [Benchmark]
+    public ValueTask<int> FASTER_GetAsyncInPlace() => GetAsyncInPlace(_fasterBuffer);
 
     [Benchmark]
     public Task FASTER_SetAsync() => SetAsync(_faster);
     [Benchmark]
-    public Task FASTER_SetAsyncBuffer() => SetAsyncNew(_fasterBuffer);
+    public Task FASTER_SetAsyncBuffer() => SetAsyncBuffer(_fasterBuffer);
 
     [Benchmark]
     public int SQLite_Get() => Get(_sqlite);
@@ -217,6 +259,34 @@ public class CacheBenchmarks : IDisposable
 
     [Benchmark]
     public Task SQLite_SetAsync() => SetAsync(_sqlite);
+
+#if REDIS
+    [Benchmark]
+    public int Redis_Get() => Get(_redis);
+
+    [Benchmark]
+    public void Redis_Set() => Set(_redis);
+
+    [Benchmark]
+    public ValueTask<int> Redis_GetAsync() => GetAsync(_redis);
+
+    [Benchmark]
+    public Task Redis_SetAsync() => SetAsync(_redis);
+#endif
+
+#if GARNET
+    [Benchmark]
+    public int Garnet_Get() => Get(_garnet);
+
+    [Benchmark]
+    public void Garnet_Set() => Set(_garnet);
+
+    [Benchmark]
+    public ValueTask<int> Garnet_GetAsync() => GetAsync(_garnet);
+
+    [Benchmark]
+    public Task Garnet_SetAsync() => SetAsync(_garnet);
+#endif
 
 #if NET8_0_OR_GREATER
     [Benchmark]
