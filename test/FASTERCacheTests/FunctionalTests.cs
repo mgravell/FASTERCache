@@ -4,6 +4,7 @@ using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -202,6 +203,68 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
     }
 
     [Fact]
+    public void SlidingExpirationForceDisk()
+    {
+        var key = Caller();
+        Assert.Null(Cache.Get(key));
+        var original = Guid.NewGuid().ToByteArray();
+
+        // memory size is PageSizeBits+2
+        //init with trash, up to the memory->disk transition size
+        byte[] trashData = new byte[1 << (PageSizeBits - 2)];
+        Random.Shared.NextBytes(trashData);
+        List<string> trashKeys = new();
+        for (int i = 0; i < 16; i++)
+        {
+            var trashKey = Guid.NewGuid().ToString("N");
+            trashKeys.Add(trashKey);
+            Cache.Set(trashKey, trashData, RelativeNever);
+        }
+
+        //init with trash, up to the memory->disk transition size
+        foreach (var trashKey in Enumerable.Reverse(trashKeys))
+        {
+            var trash = Cache.Get(trashKey);
+            Assert.NotNull(trash);
+        }
+
+        Cache.Set(key, original, SlidingOneMinute);
+
+        var retrieved = Cache.Get(key);
+        Assert.NotNull(retrieved);
+        Assert.Equal(original, retrieved);
+
+        for (int i = 0; i < 5; i++)
+        {
+            fixture.AddTime(TimeSpan.FromMinutes(0.8));
+            retrieved = Cache.Get(key);
+            Assert.NotNull(retrieved);
+            Assert.Equal(original, retrieved);
+        }
+
+        for (int i = 0; i < 3; i++)
+        {
+            fixture.AddTime(TimeSpan.FromMinutes(0.8));
+            Cache.Refresh(key);
+        }
+
+        fixture.AddTime(TimeSpan.FromMinutes(0.8));
+        retrieved = Cache.Get(key);
+        Assert.NotNull(retrieved);
+        Assert.Equal(original, retrieved);
+
+        fixture.AddTime(TimeSpan.FromMinutes(1.2));
+        retrieved = Cache.Get(key);
+        Assert.Null(retrieved);
+
+        foreach (var trashKey in trashKeys)
+        {
+            retrieved = Cache.Get(trashKey);
+            Assert.NotNull(retrieved);
+        }
+    }
+
+    [Fact]
     public async Task SlidingExpirationAsync()
     {
         var key = Caller();
@@ -237,14 +300,14 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
     }
 
     [Fact]
-    public async Task SlidingExpirationForcedAsync()
+    public async Task SlidingExpirationForceDiskAsync()
     {
         var key = Caller();
         Assert.Null(await Cache.GetAsync(key));
         var original = Guid.NewGuid().ToByteArray();
         // memory size is PageSizeBits+2
-        //init with trash
-        byte[] trashData = new byte[1 << (PageSizeBits - 2)]; // try different sizes, -2 fails, -3 works, it's about the in-memory boundary (16kb)
+        //init with trash, up to the memory->disk transition size
+        byte[] trashData = new byte[1 << (PageSizeBits - 2)]; 
         Random.Shared.NextBytes(trashData);
         List<string> trashKeys = new();
         for (int i = 0; i < 16; i++)
@@ -254,9 +317,10 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
             await Cache.SetAsync(trashKey, trashData, RelativeNever);
         }
 
+        // reversed to simplify tracking keys
         foreach (var trashKey in Enumerable.Reverse(trashKeys))
         {
-            var trash = await Cache.GetAsync(trashKey); // for -2 the 8th one fails, which is memorysize/2, which is the size after which faster pushes to disk
+            var trash = await Cache.GetAsync(trashKey);
             Assert.NotNull(trash);
         }
 
@@ -292,5 +356,37 @@ public class FunctionalTests(FunctionalTests.CacheInstance fixture) : IClassFixt
             retrieved = await Cache.GetAsync(trashKey);
             Assert.NotNull(retrieved);
         }
+    }
+
+    [Fact]
+    public async Task LargerThanMemory()
+    {
+        // deleteonclose is true, this assumes a somehow clean cachedir folder
+        var cacheFolder = Path.Join(Environment.CurrentDirectory, "cachedir");
+        Assert.True(Directory.Exists(cacheFolder));
+        var files = Directory.GetFiles(cacheFolder, "*.log*");
+        int inititalCount = files.Length;
+        byte[] data = new byte[1 << (PageSizeBits - 1)]; // 32KiB segment size, pagesize is 4KiB, writing 2KiB
+        Random.Shared.NextBytes(data);
+        List<string> keys = new();
+        for (int i = 0; i < 64; i++)
+        {
+            var key = Guid.NewGuid().ToString("N");
+            keys.Add(key);
+            await Cache.SetAsync(key, data, RelativeNever);
+        }
+
+        // just make sure we can load them again
+        foreach (var key in keys)
+        {
+            var retrieved = await Cache.GetAsync(key);
+            Assert.NotNull(retrieved);
+        }
+
+        // we should have now around 4 files more than before, just test >, due to FS delay
+        files = Directory.GetFiles(cacheFolder, "*.log*");
+        Assert.NotEmpty(files);
+        int afterSetCount = files.Length;
+        Assert.True(afterSetCount > inititalCount);
     }
 }
