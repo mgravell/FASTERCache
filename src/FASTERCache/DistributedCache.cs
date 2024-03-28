@@ -100,6 +100,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     var fixedKey = SpanByte.FromFixedSpan(keySpan);
                     var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
                     pendingRmwResult = session.RMWAsync(ref fixedKey, ref input, token: token);
+                    DebugWipe(keySpan);
                 }
             }
             ReturnLease(ref lease);
@@ -186,6 +187,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
                 var input = new Input(readArray ? Input.OperationFlags.ReadArray : Input.OperationFlags.None, bufferWriter);
                 status = session.RMW(ref fixedKey, ref input, ref output);
+                DebugWipe(keySpan);
             }
             ReturnLease(ref lease);
             if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
@@ -227,6 +229,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
             {
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
                 status = session.Delete(ref fixedKey);
+                DebugWipe(keySpan);
             }
             ReturnLease(ref lease);
             if (status.IsPending)
@@ -259,6 +262,7 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 {
                     var fixedKey = SpanByte.FromFixedSpan(keySpan);
                     pendingDeleteResult = session.DeleteAsync(ref fixedKey, token: token);
+                    DebugWipe(keySpan);
                 }
             }
             ReturnLease(ref lease);
@@ -359,6 +363,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                 var fixedKey = SpanByte.FromFixedSpan(keySpan);
                 var fixedValue = SpanByte.FromFixedSpan(valueSpan);
                 status = session.Upsert(ref fixedKey, ref fixedValue);
+                DebugWipe(keySpan);
+                DebugWipe(valueSpan);
             }
             ReturnLease(ref keyLease);
             ReturnLease(ref valueLease);
@@ -404,6 +410,8 @@ internal sealed partial class DistributedCache : CacheBase<DistributedCache.Inpu
                     var fixedKey = SpanByte.FromFixedSpan(keySpan);
                     var fixedValue = SpanByte.FromFixedSpan(valueSpan);
                     pendingUpsertResult = session.UpsertAsync(ref fixedKey, ref fixedValue, token: token);
+                    DebugWipe(keySpan);
+                    DebugWipe(valueSpan);
                 }
             }
             ReturnLease(ref lease);

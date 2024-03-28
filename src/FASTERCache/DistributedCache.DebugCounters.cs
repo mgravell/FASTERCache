@@ -1,7 +1,7 @@
 ﻿using FASTER.core;
-using System.Diagnostics;
+using System;
+using System.Runtime.InteropServices;
 using System.Threading;
-using static FASTERCache.DistributedCache;
 
 namespace FASTERCache;
 
@@ -9,9 +9,15 @@ partial class DistributedCache
 {
     partial void OnDebugReadComplete(Status status, bool async);
     partial void OnDebugFault();
+    partial void DebugWipe(Span<byte> buffer);
+    partial void DebugWipe(ReadOnlySpan<byte> buffer);
 
 
 #if DEBUG
+
+    partial void DebugWipe(Span<byte> buffer) => buffer.Clear();
+    partial void DebugWipe(ReadOnlySpan<byte> buffer) => MemoryMarshal.CreateSpan(
+        ref MemoryMarshal.GetReference(buffer), buffer.Length).Clear();
     partial void OnDebugReadComplete(Status status, bool async)
     {
         if (status.IsCompletedSuccessfully)

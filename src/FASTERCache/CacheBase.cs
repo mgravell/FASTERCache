@@ -41,7 +41,7 @@ internal abstract class CacheBase : IDisposable
     {
         if (lease is not null)
         {
-            ArrayPool<byte>.Shared.Return(lease);
+            ArrayPool<byte>.Shared.Return(lease, clearArray: false);
             lease = null; // prevent double-return
         }
     }
