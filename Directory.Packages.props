@@ -15,8 +15,8 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.5.7" />
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
     <PackageVersion Include="Nerdbank.GitVersioning" Version="3.6.133" />
-    <PackageVersion Include="Microsoft.FASTER.Core" Version="2.6.3" />
-    <PackageVersion Include="FusionRocks" Version="0.1.0" />
+    <PackageVersion Include="Microsoft.Garnet" Version="1.0.2" />
+	<PackageVersion Include="FusionRocks" Version="0.1.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4" />
   </ItemGroup>
 </Project>

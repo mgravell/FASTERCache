@@ -1,4 +1,4 @@
-﻿using FASTER.core;
+﻿using Tsavorite.core;
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
@@ -36,7 +36,7 @@ partial class DistributedCache
     internal abstract class CacheFunctions<TInput, TOutput> : CacheFunctionsBase<TInput, TOutput, Empty>
         where TInput : struct, IInputTime
     {
-        public override bool ConcurrentReader(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput dst, ref ReadInfo readInfo)
+        public override bool SingleReader(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput dst, ref ReadInfo readInfo)
         {
             var span = value.AsSpan();
 
@@ -56,13 +56,13 @@ partial class DistributedCache
 
         protected virtual void Read(ref TInput input, ReadOnlySpan<byte> payload, ref TOutput output) { }
 
-        public override bool SingleReader(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput dst, ref ReadInfo readInfo)
-            => ConcurrentReader(ref key, ref input, ref value, ref dst, ref readInfo);
+        public override bool ConcurrentReader(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput dst, ref ReadInfo readInfo, ref RecordInfo recordInfo)
+            => SingleReader(ref key, ref input, ref value, ref dst, ref readInfo);
 
-        public override bool Write(ref TInput input, ref SpanByte src, ref SpanByte dst, ref UpsertInfo upsertInfo)
-            => Copy(ref src, ref dst);
+        public override bool Write(ref TInput input, ref SpanByte src, ref SpanByte dst, ref UpsertInfo upsertInfo, ref RecordInfo recordInfo)
+            => DoSafeCopy(ref src, ref dst, ref upsertInfo, ref recordInfo);
 
-        public override bool InPlaceUpdater(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput output, ref RMWInfo rmwInfo)
+        public override bool InPlaceUpdater(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput output, ref RMWInfo rmwInfo, ref RecordInfo recordInfo)
         {
             var span = value.AsSpan();
 
@@ -98,10 +98,13 @@ partial class DistributedCache
             => false;
         public override bool NeedCopyUpdate(ref SpanByte key, ref TInput input, ref SpanByte oldValue, ref TOutput output, ref RMWInfo rmwInfo)
             => true;
-        public override bool InitialUpdater(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput output, ref RMWInfo rmwInfo)
+        public override bool InitialUpdater(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput output, ref RMWInfo rmwInfo, ref RecordInfo recordInfo)
             => true;
-        public override bool CopyUpdater(ref SpanByte key, ref TInput input, ref SpanByte oldValue, ref SpanByte newValue, ref TOutput output, ref RMWInfo rmwInfo)
-            => Copy(ref oldValue, ref newValue) && InPlaceUpdater(ref key, ref input, ref newValue, ref output, ref rmwInfo);
+        public override bool CopyUpdater(ref SpanByte key, ref TInput input, ref SpanByte oldValue, ref SpanByte newValue, ref TOutput output, ref RMWInfo rmwInfo, ref RecordInfo recordInfo)
+            => DoSafeCopy(ref oldValue, ref newValue, ref rmwInfo, ref recordInfo) && InPlaceUpdater(ref key, ref input, ref newValue, ref output, ref rmwInfo, ref recordInfo);
+        public override int GetRMWInitialValueLength(ref TInput input)
+            => 12;
+        public override int GetRMWModifiedValueLength(ref SpanByte value, ref TInput input)
+            => value.Length;
     }
-
 }

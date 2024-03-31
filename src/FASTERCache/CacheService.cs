@@ -1,4 +1,4 @@
-﻿using FASTER.core;
+﻿using Tsavorite.core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
@@ -13,7 +13,7 @@ namespace FASTERCache;
 /// </summary>
 internal sealed class CacheService
 {
-    private readonly FasterKV<SpanByte, SpanByte> _cache;
+    private readonly TsavoriteKV<SpanByte, SpanByte> _cache;
 
     public CacheService(IOptions<FASTERCacheOptions> options, ILogger<CacheService> logger)
         : this(options.Value, logger) { }
@@ -67,6 +67,6 @@ internal sealed class CacheService
 
     public ClientSession<SpanByte, SpanByte, Input, Output, Context, Functions> CreateSession<Input, Output, Context, Functions>(Functions functions)
         where Functions : IFunctions<SpanByte, SpanByte, Input, Output, Context>
-        => _cache.For(functions).NewSession<Functions>();
+        => _cache.NewSession<Input, Output, Context, Functions>(functions);
 
 }
