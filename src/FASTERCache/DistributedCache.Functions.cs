@@ -59,9 +59,6 @@ partial class DistributedCache
         public override bool ConcurrentReader(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput dst, ref ReadInfo readInfo, ref RecordInfo recordInfo)
             => SingleReader(ref key, ref input, ref value, ref dst, ref readInfo);
 
-        public override bool Write(ref TInput input, ref SpanByte src, ref SpanByte dst, ref UpsertInfo upsertInfo, ref RecordInfo recordInfo)
-            => DoSafeCopy(ref src, ref dst, ref upsertInfo, ref recordInfo);
-
         public override bool InPlaceUpdater(ref SpanByte key, ref TInput input, ref SpanByte value, ref TOutput output, ref RMWInfo rmwInfo, ref RecordInfo recordInfo)
         {
             var span = value.AsSpan();
