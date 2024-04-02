@@ -5,17 +5,28 @@ using System;
 
 using var obj = new CacheBenchmarks();
 obj.Init();
-obj.FASTER_Set();
-await obj.FASTER_SetAsync();
-Console.WriteLine(obj.FASTER_Get());
-Console.WriteLine(await obj.FASTER_GetAsync());
-await obj.FASTER_SetAsyncBuffer();
-Console.WriteLine(await obj.FASTER_GetAsyncBuffer());
-obj.FASTER_SetBuffer();
-Console.WriteLine(obj.FASTER_GetBuffer());
+obj.FASTER_S_Set();
+await obj.FASTER_S_SetAsync();
+Console.WriteLine(obj.FASTER_S_Get());
+Console.WriteLine(await obj.FASTER_S_GetAsync());
+await obj.FASTER_S_SetAsyncBuffer();
+Console.WriteLine(await obj.FASTER_S_GetAsyncBuffer());
+obj.FASTER_S_SetBuffer();
+Console.WriteLine(obj.FASTER_S_GetBuffer());
+Console.WriteLine(obj.FASTER_S_GetInPlace());
+Console.WriteLine(await obj.FASTER_S_GetAsyncInPlace());
 
-Console.WriteLine(obj.FASTER_GetInPlace());
-Console.WriteLine(await obj.FASTER_GetAsyncInPlace());
+Console.WriteLine();
+obj.FASTER_NS_Set();
+await obj.FASTER_NS_SetAsync();
+Console.WriteLine(obj.FASTER_NS_Get());
+Console.WriteLine(await obj.FASTER_NS_GetAsync());
+await obj.FASTER_NS_SetAsyncBuffer();
+Console.WriteLine(await obj.FASTER_NS_GetAsyncBuffer());
+obj.FASTER_NS_SetBuffer();
+Console.WriteLine(obj.FASTER_NS_GetBuffer());
+Console.WriteLine(obj.FASTER_NS_GetInPlace());
+Console.WriteLine(await obj.FASTER_NS_GetAsyncInPlace());
 
 Console.WriteLine();
 obj.SQLite_Set();

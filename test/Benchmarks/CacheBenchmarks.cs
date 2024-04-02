@@ -11,14 +11,15 @@ using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
+using static StackExchange.Redis.Role;
 
 namespace FASTERCache;
 
 [SimpleJob, MemoryDiagnoser, MaxIterationCount(15), MinIterationCount(1)]
 public class CacheBenchmarks : IDisposable
 {
-    private readonly IDistributedCache _faster, _sqlite;
-    private readonly IFASTERDistributedCache _fasterBuffer;
+    private readonly IDistributedCache _fasterSlide, _fasterNoSlide, _sqlite;
+    private readonly IFASTERDistributedCache _fasterBufferSlide, _fasterBufferNoSlide;
 #if NET8_0_OR_GREATER
     private readonly IDistributedCache _rocks;
 #endif
@@ -28,9 +29,6 @@ public class CacheBenchmarks : IDisposable
 #if GARNET
     private readonly IDistributedCache _garnet;
 #endif
-
-    // [Params(true, false)]
-    public bool Sliding { get; set; } = true;
 
     [Params(128)]
     public int KeyLength { get; set; } = 20;
@@ -57,22 +55,30 @@ public class CacheBenchmarks : IDisposable
         key = new string(chars);
 
         var finalArr = payload.ToArray();
-        _faster.Set(key, finalArr);
+        _fasterSlide.Set(key, finalArr);
+        _fasterNoSlide.Set(key, finalArr);
         _sqlite.Set(key, finalArr);
 #if NET8_0_OR_GREATER
         _rocks.Set(key, finalArr);
 #endif
-        if (_faster is DistributedCache dc)
-        {
-            dc.SlidingExpiration = Sliding;
-        }
     }
     public CacheBenchmarks()
     {
         var services = new ServiceCollection();
-        services.AddFASTERDistributedCache(options => options.Directory = "faster");
-        _faster = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
-        _fasterBuffer = (IFASTERDistributedCache)_faster;
+        services.AddFASTERDistributedCache(options => {
+            options.Directory = "faster_slide";
+            options.SlidingExpiration = true;
+        });
+        _fasterSlide = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
+        _fasterBufferSlide = (IFASTERDistributedCache)_fasterSlide;
+
+        services = new ServiceCollection();
+        services.AddFASTERDistributedCache(options => {
+            options.Directory = "faster_noslide";
+            options.SlidingExpiration = false;
+        });
+        _fasterNoSlide = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
+        _fasterBufferNoSlide = (IFASTERDistributedCache)_fasterSlide;
 
         services = new ServiceCollection();
         services.AddSqliteCache(options => options.CachePath = @"sqlite.db", null!);
@@ -97,7 +103,8 @@ public class CacheBenchmarks : IDisposable
     public virtual void Dispose()
     {
         GC.SuppressFinalize(this);
-        (_faster as IDisposable)?.Dispose();
+        (_fasterSlide as IDisposable)?.Dispose();
+        (_fasterNoSlide as IDisposable)?.Dispose();
         (_sqlite as IDisposable)?.Dispose();
 #if NET8_0_OR_GREATER
         (_rocks as IDisposable)?.Dispose();
@@ -224,31 +231,58 @@ public class CacheBenchmarks : IDisposable
     }
 
     [Benchmark]
-    public int FASTER_Get() => Get(_faster);
+    public int FASTER_S_Get() => Get(_fasterSlide);
     
     [Benchmark]
-    public void FASTER_Set() => Set(_faster);
+    public void FASTER_S_Set() => Set(_fasterSlide);
 
     [Benchmark]
-    public int FASTER_GetBuffer() => GetBuffer(_fasterBuffer);
+    public int FASTER_S_GetBuffer() => GetBuffer(_fasterBufferSlide);
 
     [Benchmark]
-    public int FASTER_GetInPlace() => GetInPlace(_fasterBuffer);
+    public int FASTER_S_GetInPlace() => GetInPlace(_fasterBufferSlide);
 
     [Benchmark]
-    public void FASTER_SetBuffer() => SetBuffer(_fasterBuffer);
+    public void FASTER_S_SetBuffer() => SetBuffer(_fasterBufferSlide);
 
     [Benchmark]
-    public ValueTask<int> FASTER_GetAsync() => GetAsync(_faster);
+    public ValueTask<int> FASTER_S_GetAsync() => GetAsync(_fasterSlide);
     [Benchmark]
-    public ValueTask<int> FASTER_GetAsyncBuffer() => GetAsyncBuffer(_fasterBuffer);
+    public ValueTask<int> FASTER_S_GetAsyncBuffer() => GetAsyncBuffer(_fasterBufferSlide);
     [Benchmark]
-    public ValueTask<int> FASTER_GetAsyncInPlace() => GetAsyncInPlace(_fasterBuffer);
+    public ValueTask<int> FASTER_S_GetAsyncInPlace() => GetAsyncInPlace(_fasterBufferSlide);
 
     [Benchmark]
-    public Task FASTER_SetAsync() => SetAsync(_faster);
+    public Task FASTER_S_SetAsync() => SetAsync(_fasterSlide);
     [Benchmark]
-    public Task FASTER_SetAsyncBuffer() => SetAsyncBuffer(_fasterBuffer);
+    public Task FASTER_S_SetAsyncBuffer() => SetAsyncBuffer(_fasterBufferSlide);
+
+    [Benchmark]
+    public int FASTER_NS_Get() => Get(_fasterNoSlide);
+
+    [Benchmark]
+    public void FASTER_NS_Set() => Set(_fasterNoSlide);
+
+    [Benchmark]
+    public int FASTER_NS_GetBuffer() => GetBuffer(_fasterBufferNoSlide);
+
+    [Benchmark]
+    public int FASTER_NS_GetInPlace() => GetInPlace(_fasterBufferNoSlide);
+
+    [Benchmark]
+    public void FASTER_NS_SetBuffer() => SetBuffer(_fasterBufferNoSlide);
+
+    [Benchmark]
+    public ValueTask<int> FASTER_NS_GetAsync() => GetAsync(_fasterNoSlide);
+    [Benchmark]
+    public ValueTask<int> FASTER_NS_GetAsyncBuffer() => GetAsyncBuffer(_fasterBufferNoSlide);
+    [Benchmark]
+    public ValueTask<int> FASTER_NS_GetAsyncInPlace() => GetAsyncInPlace(_fasterBufferNoSlide);
+
+    [Benchmark]
+    public Task FASTER_NS_SetAsync() => SetAsync(_fasterNoSlide);
+    [Benchmark]
+    public Task FASTER_NS_SetAsyncBuffer() => SetAsyncBuffer(_fasterBufferNoSlide);
 
     [Benchmark]
     public int SQLite_Get() => Get(_sqlite);

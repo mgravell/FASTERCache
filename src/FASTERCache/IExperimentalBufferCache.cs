@@ -15,10 +15,10 @@ public interface IExperimentalBufferCache : IDistributedCache
     bool Get(string key, IBufferWriter<byte> target);
     void Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options);
 }
-#pragma warning restore RS0016 // Add public types and members to the declared API
 
 public interface IFASTERDistributedCache : IExperimentalBufferCache
 {
     TValue? Get<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer);
     ValueTask<TValue?> GetAsync<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token = default);
 }
+#pragma warning restore RS0016 // Add public types and members to the declared API
