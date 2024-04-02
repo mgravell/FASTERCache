@@ -131,8 +131,8 @@ internal sealed partial class DistributedCache : CacheBase,
         {
             try
             {
-                var iter = await session.CompletePendingWithOutputsAsync(token: token);
-                var status = CompleteSinglePending(iter, out var output);
+                var outputs = await session.CompletePendingWithOutputsAsync(token: token);
+                var status = CompleteSinglePending(outputs, out var output);
 
                 Assert(status, @this.SlidingExpiration ? nameof(session.RMW) : nameof(session.Read));
                 @this.OnDebugRMWComplete(status, async: true);
