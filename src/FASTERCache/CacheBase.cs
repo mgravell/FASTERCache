@@ -132,19 +132,21 @@ internal abstract class CacheBase : IDisposable
 
     protected static Status CompleteSinglePending<TInput, TOutput>(CompletedOutputIterator<SpanByte, SpanByte, TInput, TOutput, Empty> outputs, out TOutput output)
     {
-        int count = 0;
-        Unsafe.SkipInit<Status>(out var status);
-        Unsafe.SkipInit(out output);
-        while (outputs.Next())
+        using (outputs)
         {
-            ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, Empty> current = ref outputs.Current;
-            status = current.Status;
-            output = current.Output;
-            count++;
+            int count = 0;
+            Unsafe.SkipInit<Status>(out var status);
+            Unsafe.SkipInit(out output);
+            while (outputs.Next())
+            {
+                ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, Empty> current = ref outputs.Current;
+                status = current.Status;
+                output = current.Output;
+                count++;
+            }
+            if (count != 1) ThrowSinglePending();
+            return status;
         }
-        outputs.Dispose();
-        if (count != 1) ThrowSinglePending();
-        return status;
     }
     static void ThrowSinglePending() => throw new InvalidOperationException("Exactly one pending operation was expected");
 }
