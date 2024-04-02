@@ -5,6 +5,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 
@@ -122,22 +123,32 @@ internal abstract class CacheBase : IDisposable
         where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
         => sessions.TryTake(out var session) ? session : Cache.CreateSession<TInput, TOutput, Empty, TFunctions>(functions);
 
-    protected static void CompleteSinglePending<TInput, TOutput, TFunctions>(ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions> session, ref Status status, ref TOutput output)
+    protected static Status CompleteSinglePending<TInput, TOutput, TFunctions>(ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions> session, out TOutput output)
         where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
     {
-        if (!session.CompletePendingWithOutputs(out var outputs, wait: true)) Throw();
-        int count = 0;
-        while (outputs.Next())
-        {
-            ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, Empty> current = ref outputs.Current;
-            status = current.Status;
-            output = current.Output;
-            count++;
-        }
-        if (count != 1) Throw();
-
-        static void Throw() => throw new InvalidOperationException("Exactly one pending operation was expected");
+        if (!session.CompletePendingWithOutputs(out var outputs, wait: true)) ThrowSinglePending();
+        return CompleteSinglePending(outputs, out output);
     }
+
+    protected static Status CompleteSinglePending<TInput, TOutput>(CompletedOutputIterator<SpanByte, SpanByte, TInput, TOutput, Empty> outputs, out TOutput output)
+    {
+        using (outputs)
+        {
+            int count = 0;
+            Unsafe.SkipInit<Status>(out var status);
+            Unsafe.SkipInit(out output);
+            while (outputs.Next())
+            {
+                ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, Empty> current = ref outputs.Current;
+                status = current.Status;
+                output = current.Output;
+                count++;
+            }
+            if (count != 1) ThrowSinglePending();
+            return status;
+        }
+    }
+    static void ThrowSinglePending() => throw new InvalidOperationException("Exactly one pending operation was expected");
 }
 
 internal abstract class Clock
