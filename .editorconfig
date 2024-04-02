@@ -1,4 +1,5 @@
 ﻿[*.cs]
 
-# CA1510: Use ArgumentNullException throw helper
-dotnet_diagnostic.CA1510.severity = none
+dotnet_diagnostic.CA1510.severity = none # CA1510: Use ArgumentNullException throw helper - TFM range
+dotnet_diagnostic.IDE0057.severity = none # Slice can be simplified - clarity and TFM range
+dotnet_diagnostic.CA1513.severity = none # ObjectDisposedException.ThrowIf - TFM range

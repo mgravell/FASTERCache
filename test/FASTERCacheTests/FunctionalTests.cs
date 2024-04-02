@@ -264,7 +264,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     [Fact]
     public void SlidingExpirationForceDisk()
     {
-        var key = Caller();
+        var key = Caller(true);
         Assert.Null(Cache.Get(key));
         var original = Guid.NewGuid().ToByteArray();
 
@@ -272,7 +272,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         //init with trash, up to the memory->disk transition size
         byte[] trashData = new byte[1 << (PageSizeBits - 2)];
         Random.Shared.NextBytes(trashData);
-        List<string> trashKeys = new();
+        List<string> trashKeys = [];
         for (int i = 0; i < 16; i++)
         {
             var trashKey = Guid.NewGuid().ToString("N");
@@ -371,7 +371,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         //init with trash, up to the memory->disk transition size
         byte[] trashData = new byte[1 << (PageSizeBits - 2)]; 
         Random.Shared.NextBytes(trashData);
-        List<string> trashKeys = new();
+        List<string> trashKeys = [];
         for (int i = 0; i < 16; i++)
         {
             var trashKey = Guid.NewGuid().ToString("N");
@@ -452,7 +452,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         int inititalCount = files.Length;
         byte[] data = new byte[1 << (PageSizeBits - 1)]; // 32KiB segment size, pagesize is 4KiB, writing 2KiB
         Random.Shared.NextBytes(data);
-        List<string> keys = new();
+        List<string> keys = [];
         for (int i = 0; i < 64; i++)
         {
             var key = Guid.NewGuid().ToString("N");

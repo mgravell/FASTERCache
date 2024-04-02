@@ -159,14 +159,13 @@ internal abstract class Clock
         internal static Clock Create() => SystemClockClock.Shared;
 #endif
     internal static Clock Create(ISystemClock time) => new SystemClockClock(time);
-    private sealed class SystemClockClock : Clock
+    private sealed class SystemClockClock(ISystemClock time) : Clock
     {
 #if !NET8_0_OR_GREATER
         private static SystemClockClock? s_shared;
         internal static SystemClockClock Shared => s_shared ??= new(new SystemClock());
+
 #endif
-        public SystemClockClock(ISystemClock time) => _time = time;
-        private readonly ISystemClock _time;
-        public override long NowTicks => _time.UtcNow.UtcTicks;
+        public override long NowTicks => time.UtcNow.UtcTicks;
     }
 }

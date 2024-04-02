@@ -143,7 +143,9 @@ public class CacheBenchmarks : IDisposable
             Count = 0;
             if (Interlocked.CompareExchange(ref _spare, this, null) != null)
             {
-                ArrayPool<byte>.Shared.Return(_buffer);
+                var snapshot = _buffer;
+                _buffer = [];
+                ArrayPool<byte>.Shared.Return(snapshot);
             }
         }
 
@@ -211,7 +213,7 @@ public class CacheBenchmarks : IDisposable
         await cache.SetAsync(key, payload.ToArray(), Expiry);
     }
 
-    private static DistributedCacheEntryOptions Expiry = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
+    private static readonly DistributedCacheEntryOptions Expiry = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
 
     private async Task SetAsyncBuffer(IExperimentalBufferCache cache)
     {

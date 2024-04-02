@@ -84,8 +84,8 @@ internal sealed partial class DistributedCache : CacheBase,
         ? RMWAsync(sessions, functions, key, ref input, token)
         : ReadAsync(sessions, functions, key, ref input, token);
 
-    private ConcurrentBag<ByteArraySession> _byteArraySessions = [];
-    private ConcurrentBag<BooleanSession> _booleanSessions = [];
+    private readonly ConcurrentBag<ByteArraySession> _byteArraySessions = [];
+    private readonly ConcurrentBag<BooleanSession> _booleanSessions = [];
     private BooleanSession GetBooleanSession() => GetSession(_booleanSessions, BooleanFunctions.Instance);
 
     private void ReuseSession(ByteArraySession session) => ReuseSession(_byteArraySessions, session);
@@ -620,6 +620,7 @@ internal sealed partial class DistributedCache : CacheBase,
 
     readonly struct InPlaceReadInput<TState, TValue> : IInputTime
     {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "IDE0290:Use primary constructor", Justification = "Want to be very explicit about intent")]
         public InPlaceReadInput(long nowTicks, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
         {
             State = state;
@@ -633,7 +634,7 @@ internal sealed partial class DistributedCache : CacheBase,
         public class Functions : CacheFunctions<InPlaceReadInput<TState, TValue>, TValue>
         {
             private Functions() { }
-            public static readonly Functions Instance = new Functions();
+            public static readonly Functions Instance = new();
             protected override void Read(ref InPlaceReadInput<TState, TValue> input, ReadOnlySpan<byte> payload, ref TValue output)
             {
                 var mgr = UnsafeMemoryManager.Create(payload);
@@ -645,7 +646,7 @@ internal sealed partial class DistributedCache : CacheBase,
 
     public unsafe class UnsafeMemoryManager : MemoryManager<byte>
     {
-        private static readonly ConcurrentBag<UnsafeMemoryManager> spares = new();
+        private static readonly ConcurrentBag<UnsafeMemoryManager> spares = [];
         private UnsafeMemoryManager() { }
         public static UnsafeMemoryManager Create(ReadOnlySpan<byte> fixedSpan)
         {
