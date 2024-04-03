@@ -1,4 +1,4 @@
-﻿using FASTER.core;
+﻿using Tsavorite.core;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using System;
@@ -10,8 +10,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using BooleanSession = FASTER.core.ClientSession<FASTER.core.SpanByte, FASTER.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, bool, FASTER.core.Empty, FASTERCache.DistributedCache.BooleanFunctions>;
-using ByteArraySession = FASTER.core.ClientSession<FASTER.core.SpanByte, FASTER.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, byte[], FASTER.core.Empty, FASTERCache.DistributedCache.ByteArrayFunctions>;
+using BooleanSession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, bool, Tsavorite.core.Empty, FASTERCache.DistributedCache.BooleanFunctions>;
+using ByteArraySession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, byte[], Tsavorite.core.Empty, FASTERCache.DistributedCache.ByteArrayFunctions>;
 
 namespace FASTERCache;
 
@@ -101,7 +101,7 @@ internal sealed partial class DistributedCache : CacheBase,
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult;
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
@@ -144,7 +144,7 @@ internal sealed partial class DistributedCache : CacheBase,
         static async ValueTask<TOutput?> Awaited(DistributedCache @this,
             ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction> session,
             ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
-            ValueTask<FasterKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
             )
         {
             try
@@ -186,7 +186,7 @@ internal sealed partial class DistributedCache : CacheBase,
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingReadResult;
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingReadResult;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
@@ -229,7 +229,7 @@ internal sealed partial class DistributedCache : CacheBase,
         static async ValueTask<TOutput?> Awaited(DistributedCache @this,
             ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction> session,
             ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
-            ValueTask<FasterKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
             )
         {
             try
@@ -368,7 +368,7 @@ internal sealed partial class DistributedCache : CacheBase,
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult;
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
@@ -405,7 +405,7 @@ internal sealed partial class DistributedCache : CacheBase,
 
         static async Task Awaited(DistributedCache @this,
             BooleanSession session,
-            ValueTask<FasterKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult)
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult)
         {
             try
             {
@@ -515,7 +515,7 @@ internal sealed partial class DistributedCache : CacheBase,
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default, value, out var valueLease, options);
-            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult;
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
@@ -556,7 +556,7 @@ internal sealed partial class DistributedCache : CacheBase,
 
         static async ValueTask Awaited(DistributedCache @this,
             BooleanSession session,
-            ValueTask<FasterKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult
+            ValueTask<TsavoriteKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult
             )
         {
             try

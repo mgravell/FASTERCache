@@ -12,7 +12,7 @@
         <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
         <PackageReference Include="Microsoft.Extensions.Options" />
-        <PackageReference Include="Microsoft.FASTER.Core" />
+        <PackageReference Include="Microsoft.Garnet" />
         <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" />
     </ItemGroup>
 </Project>
