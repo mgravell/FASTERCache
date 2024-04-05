@@ -321,6 +321,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
             retrieved = Cache.Get(trashKey);
             Assert.NotNull(retrieved);
         }
+        WriteStats();
     }
 
     [Fact]
