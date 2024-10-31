@@ -14,7 +14,7 @@ FASTERCache.FASTERCacheOptions.Directory.set -> void
 FASTERCache.FASTERCacheOptions.FASTERCacheOptions() -> void
 FASTERCache.FASTERCacheOptions.LogCapacity.get -> long
 FASTERCache.FASTERCacheOptions.LogCapacity.set -> void
-FASTERCache.FASTERCacheOptions.LogSettings.get -> FASTER.core.LogSettings!
+FASTERCache.FASTERCacheOptions.Settings.get -> Tsavorite.core.KVSettings<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte>!
 FASTERCache.FASTERCacheOptions.SlidingExpiration.get -> bool
 FASTERCache.FASTERCacheOptions.SlidingExpiration.set -> void
 Microsoft.Extensions.DependencyInjection.FASTERCacheServiceExtensions

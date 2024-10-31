@@ -8,6 +8,10 @@ using System.Diagnostics;
 using System.Text;
 using System.Threading;
 
+using SpanByteStoreFunctions = Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>;
+using SpanByteAllocator = Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>;
+using System.Runtime.CompilerServices;
+
 namespace FASTERCache;
 
 /// <summary>
@@ -115,26 +119,24 @@ internal abstract class CacheBase : IDisposable
     protected readonly Clock Clock;
 
 
-    protected ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions> GetSession<TInput, TOutput, TFunctions>(
-        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>> sessions,
+    protected ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions, SpanByteStoreFunctions, SpanByteAllocator> GetSession<TInput, TOutput, TFunctions>(
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions, SpanByteStoreFunctions, SpanByteAllocator>> sessions,
         TFunctions functions
     )
-        where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+        where TFunctions : ISessionFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
         => sessions.TryTake(out var session) ? session : Cache.CreateSession<TInput, TOutput, Empty, TFunctions>(functions);
 
-    protected static void CompleteSinglePending<TInput, TOutput, TFunctions>(ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions> session, ref Status status, ref TOutput output)
-        where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+    protected static void CompleteSinglePending<TInput, TOutput, TFunctions>(ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions, SpanByteStoreFunctions, SpanByteAllocator> session,
+        out Status status, out TOutput output)
+        where TFunctions : ISessionFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
     {
-        if (!session.CompletePendingWithOutputs(out var outputs, wait: true)) Throw();
-        int count = 0;
-        while (outputs.Next())
-        {
-            ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, Empty> current = ref outputs.Current;
-            status = current.Status;
-            output = current.Output;
-            count++;
-        }
-        if (count != 1) Throw();
+        if (!session.BasicContext.CompletePendingWithOutputs(out var outputs, wait: true)) Throw();
+
+        if (!outputs.Next()) Throw();
+        ref CompletedOutput<SpanByte, SpanByte, TInput, TOutput, Empty> current = ref outputs.Current;
+        status = current.Status;
+        output = current.Output;
+        if (outputs.Next()) Throw();
 
         static void Throw() => throw new InvalidOperationException("Exactly one pending operation was expected");
     }

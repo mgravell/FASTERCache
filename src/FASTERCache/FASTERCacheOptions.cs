@@ -13,8 +13,7 @@ public sealed class FASTERCacheOptions
 {
     public string Directory { get; set; } = "";
 
-    public LogSettings LogSettings { get; } = new();
-
+    public KVSettings<SpanByte, SpanByte> Settings { get; } = new();
     public bool DeleteOnClose { get; set; } = false;
     public long LogCapacity { get; set; } = -1;
     public bool SlidingExpiration { get; set; } = true;

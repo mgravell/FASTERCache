@@ -10,10 +10,24 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using BooleanSession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, bool, Tsavorite.core.Empty, FASTERCache.DistributedCache.BooleanFunctions>;
-using ByteArraySession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, FASTERCache.DistributedCache.BasicInputContext, byte[], Tsavorite.core.Empty, FASTERCache.DistributedCache.ByteArrayFunctions>;
+
+using SpanByteStoreFunctions = Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>;
+using SpanByteAllocator = Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>;
+
+using BooleanSession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte,
+    FASTERCache.DistributedCache.BasicInputContext, bool, Tsavorite.core.Empty,
+    FASTERCache.DistributedCache.BooleanFunctions,
+    Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>,
+    Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>>;
+
+using ByteArraySession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte,
+    FASTERCache.DistributedCache.BasicInputContext, byte[], Tsavorite.core.Empty,
+    FASTERCache.DistributedCache.ByteArrayFunctions,
+    Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>,
+    Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>>;
 
 namespace FASTERCache;
+
 
 /// <summary>
 /// Implements IDistributedCache
@@ -75,15 +89,6 @@ internal sealed partial class DistributedCache : CacheBase,
 
     static bool Force() => true;
 
-    private ValueTask<TOutput?> GetAsync<TInput, TOutput, TFunction>(
-        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
-        TFunction functions,
-        string key, ref TInput input, CancellationToken token)
-        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
-        => SlidingExpiration
-        ? RMWAsync(sessions, functions, key, ref input, token)
-        : ReadAsync(sessions, functions, key, ref input, token);
-
     private readonly ConcurrentBag<ByteArraySession> _byteArraySessions = [];
     private readonly ConcurrentBag<BooleanSession> _booleanSessions = [];
     private BooleanSession GetBooleanSession() => GetSession(_booleanSessions, BooleanFunctions.Instance);
@@ -91,47 +96,38 @@ internal sealed partial class DistributedCache : CacheBase,
     private void ReuseSession(ByteArraySession session) => ReuseSession(_byteArraySessions, session);
     private void ReuseSession(BooleanSession session) => ReuseSession(_booleanSessions, session);
 
-    private ValueTask<TOutput?> RMWAsync<TInput, TOutput, TFunction>(
-        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+    private ValueTask<TOutput?> GetAsync<TInput, TOutput, TFunction>(
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction, SpanByteStoreFunctions, SpanByteAllocator>> sessions,
         TFunction functions,
         string key, ref TInput input, CancellationToken token)
-        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+        where TFunction : ISessionFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
     {
         var session = GetSession(sessions, functions);
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult;
+            Status status;
+            var sliding = SlidingExpiration;
+            TOutput output = default!;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
                 {
-                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                    pendingRmwResult = session.RMWAsync(ref fixedKey, ref input, token: token);
+                    var fixedKey = SpanByte.FromPinnedSpan(keySpan);
+                    status = sliding
+                        ? session.BasicContext.RMW(ref fixedKey, ref input, ref output)
+                        : session.BasicContext.Read(ref fixedKey, ref input, ref output);
                     DebugWipe(keySpan);
                 }
             }
             ReturnLease(ref lease);
 
-            if (!pendingRmwResult.IsCompletedSuccessfully)
-            {
-                return Awaited(this, session, sessions, pendingRmwResult);
-            }
-            var rmwResult = pendingRmwResult.GetAwaiter().GetResult();
-
-            var status = rmwResult.Status;
-            var output = rmwResult.Output;
             if (status.IsPending)
             {
-                // WHY NO CompletePendingAsync <== (from search? this one)
-                // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
-                // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
-                // tl;dr: we should not need CompletePendingAsync
-                // await state.Session.CompletePendingAsync(token: state.Token);
-                (status, output) = rmwResult.Complete();
+                return Awaited(this, session, sessions, sliding, token);
             }
-            Assert(status, nameof(session.RMWAsync));
-            OnDebugRMWComplete(status, async: false);
+            Assert(status, sliding ? nameof(session.BasicContext.RMW) : nameof(session.BasicContext.Read));
+            OnDebugRMWComplete(status, async: true);
             ReuseSession(sessions, session);
             return new(output);
         }
@@ -142,113 +138,19 @@ internal sealed partial class DistributedCache : CacheBase,
             throw;
         }
         static async ValueTask<TOutput?> Awaited(DistributedCache @this,
-            ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction> session,
-            ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.RmwAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
+            ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction, SpanByteStoreFunctions, SpanByteAllocator> session,
+            ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction, SpanByteStoreFunctions, SpanByteAllocator>> sessions,
+            bool sliding,
+            CancellationToken token
             )
         {
             try
             {
-                var rmwResult = await pendingRmwResult;
+                await session.ReadyToCompletePendingAsync(token);
+                CompleteSinglePending(session, out var status, out var output);
 
-                var status = rmwResult.Status;
-                var output = rmwResult.Output;
-                if (status.IsPending)
-                {
-                    // WHY NO CompletePendingAsync <== (from search? this one)
-                    // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
-                    // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
-                    // tl;dr: we should not need CompletePendingAsync
-                    // await state.Session.CompletePendingAsync(token: state.Token);
-                    (status, output) = rmwResult.Complete();
-                }
-                Assert(status, nameof(session.RMWAsync));
-                @this.OnDebugRMWComplete(status, async: false);
-                ReuseSession(sessions, session);
-                return output;
-            }
-            catch
-            {
-                @this.OnDebugFault();
-                FaultSession(session);
-                throw;
-            }
-        }
-    }
-
-    private ValueTask<TOutput?> ReadAsync<TInput, TOutput, TFunction>(
-        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
-        TFunction functions,
-        string key, ref TInput input, CancellationToken token)
-        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
-    {
-        var session = GetSession(sessions, functions);
-        try
-        {
-            var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingReadResult;
-            unsafe
-            {
-                fixed (byte* keyPtr = keySpan)
-                {
-                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                    pendingReadResult = session.ReadAsync(fixedKey, input, token: token);
-                    DebugWipe(keySpan);
-                }
-            }
-            ReturnLease(ref lease);
-
-            if (!pendingReadResult.IsCompletedSuccessfully)
-            {
-                return Awaited(this, session, sessions, pendingReadResult);
-            }
-            var rmwResult = pendingReadResult.GetAwaiter().GetResult();
-
-            var status = rmwResult.Status;
-            var output = rmwResult.Output;
-            if (status.IsPending)
-            {
-                // WHY NO CompletePendingAsync <== (from search? this one)
-                // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
-                // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
-                // tl;dr: we should not need CompletePendingAsync
-                // await state.Session.CompletePendingAsync(token: state.Token);
-                (status, output) = rmwResult.Complete();
-            }
-            Assert(status, nameof(session.ReadAsync));
-            OnDebugRMWComplete(status, async: false);
-            ReuseSession(sessions, session);
-            return new(output);
-        }
-        catch
-        {
-            OnDebugFault();
-            FaultSession(session);
-            throw;
-        }
-        static async ValueTask<TOutput?> Awaited(DistributedCache @this,
-            ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction> session,
-            ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.ReadAsyncResult<TInput, TOutput, Empty>> pendingRmwResult
-            )
-        {
-            try
-            {
-                var rmwResult = await pendingRmwResult;
-
-                var status = rmwResult.Status;
-                var output = rmwResult.Output;
-                if (status.IsPending)
-                {
-                    // WHY NO CompletePendingAsync <== (from search? this one)
-                    // see https://github.com/microsoft/FASTER/issues/355#issuecomment-713213205
-                    // and https://github.com/microsoft/FASTER/issues/355#issuecomment-713204965
-                    // tl;dr: we should not need CompletePendingAsync
-                    // await state.Session.CompletePendingAsync(token: state.Token);
-                    (status, output) = rmwResult.Complete();
-                }
-                Assert(status, nameof(session.ReadAsync));
-                @this.OnDebugRMWComplete(status, async: false);
+                Assert(status, sliding ? nameof(session.BasicContext.RMW) : nameof(session.BasicContext.Read));
+                @this.OnDebugRMWComplete(status, async: true);
                 ReuseSession(sessions, session);
                 return output;
             }
@@ -264,10 +166,10 @@ internal sealed partial class DistributedCache : CacheBase,
     const int MAX_STACKALLOC = 128;
 
     private unsafe TOutput? Get<TInput, TOutput, TFunction>(
-        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction>> sessions,
+        ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunction, SpanByteStoreFunctions, SpanByteAllocator>> sessions,
         TFunction functions,
         string key, ref TInput input)
-        where TFunction : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+        where TFunction : ISessionFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
     {
         var session = GetSession(sessions, functions);
         try
@@ -278,16 +180,16 @@ internal sealed partial class DistributedCache : CacheBase,
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             fixed (byte* keyPtr = keySpan)
             {
-                var fixedKey = SpanByte.FromFixedSpan(keySpan);
+                var fixedKey = SpanByte.FromPinnedSpan(keySpan);
                 status = sliding
-                    ? session.RMW(ref fixedKey, ref input, ref output)
-                    : session.Read(ref fixedKey, ref input, ref output);
+                    ? session.BasicContext.RMW(ref fixedKey, ref input, ref output)
+                    : session.BasicContext.Read(ref fixedKey, ref input, ref output);
                 DebugWipe(keySpan);
             }
             ReturnLease(ref lease);
-            if (status.IsPending) CompleteSinglePending(session, ref status, ref output);
+            if (status.IsPending) CompleteSinglePending(session, out status, out output);
 
-            Assert(status, sliding ? nameof(session.RMW) : nameof(session.Read));
+            Assert(status, sliding ? nameof(session.BasicContext.RMW) : nameof(session.BasicContext.Read));
             OnDebugRMWComplete(status, async: false);
             ReuseSession(sessions, session);
             return output;
@@ -341,17 +243,16 @@ internal sealed partial class DistributedCache : CacheBase,
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             fixed (byte* ptr = keySpan)
             {
-                var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                status = session.Delete(ref fixedKey);
+                var fixedKey = SpanByte.FromPinnedSpan(keySpan);
+                status = session.BasicContext.Delete(ref fixedKey);
                 DebugWipe(keySpan);
             }
             ReturnLease(ref lease);
             if (status.IsPending)
             {
-                bool dummy = false;
-                CompleteSinglePending(session, ref status, ref dummy);
+                CompleteSinglePending(session, out status, out _);
             }
-            Assert(status, nameof(session.Delete));
+            Assert(status, nameof(session.BasicContext.Delete));
             OnDebugRemoveComplete(status, false);
             ReuseSession(session);
         }
@@ -368,31 +269,23 @@ internal sealed partial class DistributedCache : CacheBase,
         try
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult;
+            Status status;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
                 {
-                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                    pendingDeleteResult = session.DeleteAsync(ref fixedKey, token: token);
+                    var fixedKey = SpanByte.FromPinnedSpan(keySpan);
+                    status = session.BasicContext.Delete(ref fixedKey);
                     DebugWipe(keySpan);
                 }
             }
             ReturnLease(ref lease);
 
-            if (!pendingDeleteResult.IsCompletedSuccessfully)
-            {
-                return Awaited(this, session, pendingDeleteResult);
-            }
-            var deleteResult = pendingDeleteResult.GetAwaiter().GetResult();
-            var status = deleteResult.Status;
             if (status.IsPending)
             {
-                // search: WHY NO CompletePendingAsync
-                // await session.CompletePendingAsync(token: token);
-                status = deleteResult.Complete();
+                return Awaited(this, session, token);
             }
-            Assert(status, nameof(session.DeleteAsync));
+            Assert(status, nameof(session.BasicContext.Delete));
             OnDebugRemoveComplete(status, false);
             ReuseSession(session);
             return Task.CompletedTask;
@@ -405,19 +298,14 @@ internal sealed partial class DistributedCache : CacheBase,
 
         static async Task Awaited(DistributedCache @this,
             BooleanSession session,
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.DeleteAsyncResult<BasicInputContext, bool, Empty>> pendingDeleteResult)
+            CancellationToken token)
         {
             try
             {
-                var deleteResult = await pendingDeleteResult;
-                var status = deleteResult.Status;
-                if (status.IsPending)
-                {
-                    // search: WHY NO CompletePendingAsync
-                    // await session.CompletePendingAsync(token: token);
-                    status = deleteResult.Complete();
-                }
-                Assert(status, nameof(session.DeleteAsync));
+                await session.ReadyToCompletePendingAsync(token);
+                CompleteSinglePending(session, out var status, out _);
+
+                Assert(status, nameof(session.BasicContext.Delete));
                 @this.OnDebugRemoveComplete(status, true);
                 @this.ReuseSession(session);
             }
@@ -474,9 +362,9 @@ internal sealed partial class DistributedCache : CacheBase,
             fixed (byte* keyPtr = keySpan)
             fixed (byte* valuePtr = valueSpan)
             {
-                var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                var fixedValue = SpanByte.FromFixedSpan(valueSpan);
-                status = session.Upsert(ref fixedKey, ref fixedValue);
+                var fixedKey = SpanByte.FromPinnedSpan(keySpan);
+                var fixedValue = SpanByte.FromPinnedSpan(valueSpan);
+                status = session.BasicContext.Upsert(ref fixedKey, ref fixedValue);
                 DebugWipe(keySpan);
                 DebugWipe(valueSpan);
             }
@@ -485,10 +373,9 @@ internal sealed partial class DistributedCache : CacheBase,
 
             if (status.IsPending)
             {
-                bool dummy = false;
-                CompleteSinglePending(session, ref status, ref dummy);
+                CompleteSinglePending(session, out status, out _);
             }
-            Assert(status, nameof(session.Upsert));
+            Assert(status, nameof(session.BasicContext.Upsert));
             OnDebugUpsertComplete(status, false);
             ReuseSession(session);
         }
@@ -515,15 +402,16 @@ internal sealed partial class DistributedCache : CacheBase,
         {
             var keySpan = WriteKey(key.Length < MAX_STACKALLOC ? stackalloc byte[MAX_STACKALLOC] : default, key, out var lease);
             var valueSpan = WriteValue(value.Length <= MAX_STACKALLOC - 12 ? stackalloc byte[MAX_STACKALLOC] : default, value, out var valueLease, options);
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult;
+            Status status;
             unsafe
             {
                 fixed (byte* keyPtr = keySpan)
                 fixed (byte* valuePtr = valueSpan)
                 {
-                    var fixedKey = SpanByte.FromFixedSpan(keySpan);
-                    var fixedValue = SpanByte.FromFixedSpan(valueSpan);
-                    pendingUpsertResult = session.UpsertAsync(ref fixedKey, ref fixedValue, token: token);
+                    var fixedKey = SpanByte.FromPinnedSpan(keySpan);
+                    var fixedValue = SpanByte.FromPinnedSpan(valueSpan);
+                    status = session.BasicContext.Upsert(ref fixedKey, ref fixedValue);
+
                     DebugWipe(keySpan);
                     DebugWipe(valueSpan);
                 }
@@ -531,19 +419,11 @@ internal sealed partial class DistributedCache : CacheBase,
             ReturnLease(ref lease);
             ReturnLease(ref valueLease);
 
-            if (!pendingUpsertResult.IsCompletedSuccessfully)
-            {
-                return Awaited(this, session, pendingUpsertResult);
-            }
-            var upsertResult = pendingUpsertResult.GetAwaiter().GetResult();
-            var status = upsertResult.Status;
             if (status.IsPending)
             {
-                // search: WHY NO CompletePendingAsync
-                // await session.CompletePendingAsync(token: token);
-                status = upsertResult.Complete();
+                return Awaited(this, session, token);
             }
-            Assert(status, nameof(session.UpsertAsync));
+            Assert(status, nameof(session.BasicContext.Upsert));
             OnDebugUpsertComplete(status, false);
             ReuseSession(session);
             return default;
@@ -556,20 +436,15 @@ internal sealed partial class DistributedCache : CacheBase,
 
         static async ValueTask Awaited(DistributedCache @this,
             BooleanSession session,
-            ValueTask<TsavoriteKV<SpanByte, SpanByte>.UpsertAsyncResult<BasicInputContext, bool, Empty>> pendingUpsertResult
+            CancellationToken token
             )
         {
             try
             {
-                var upsertResult = await pendingUpsertResult;
-                var status = upsertResult.Status;
-                if (status.IsPending)
-                {
-                    // search: WHY NO CompletePendingAsync
-                    // await session.CompletePendingAsync(token: token);
-                    status = upsertResult.Complete();
-                }
-                Assert(status, nameof(session.UpsertAsync));
+                await session.ReadyToCompletePendingAsync(token);
+                CompleteSinglePending(session, out var status, out _);
+
+                Assert(status, nameof(session.BasicContext.Upsert));
                 @this.OnDebugUpsertComplete(status, true);
                 @this.ReuseSession(session);
             }
@@ -600,17 +475,17 @@ internal sealed partial class DistributedCache : CacheBase,
         => Write(key, value, options);
 
 
-    private ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>> GetSessionBag<TInput, TOutput, TFunctions>()
-        where TFunctions : IFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
+    private ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions, SpanByteStoreFunctions, SpanByteAllocator>> GetSessionBag<TInput, TOutput, TFunctions>()
+        where TFunctions : ISessionFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>
         where TInput : struct, IInputTime
     {
         var key = (typeof(TInput), typeof(TOutput), typeof(TFunctions));
         if (_bags.TryGetValue(key, out var found))
         {
-            return (ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>>)found;
+            return (ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions, SpanByteStoreFunctions, SpanByteAllocator>>)found;
         }
         
-        var newObj = new ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions>>();
+        var newObj = new ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions, SpanByteStoreFunctions, SpanByteAllocator>>();
         _bags[key] = newObj;
         return newObj;
     }

@@ -25,7 +25,6 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     private readonly ITestOutputHelper log;
     private IDistributedCache Cache => fixture.Cache;
     private IExperimentalBufferCache BufferCache => fixture.BufferCache;
-    private const int PageSizeBits = 12;
 
     public sealed class CacheInstance : IDisposable
     {
@@ -48,9 +47,6 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
             services.AddFASTERDistributedCache(options =>
             {
                 options.Directory = "cachedir";
-                options.LogSettings.PageSizeBits = PageSizeBits;
-                options.LogSettings.MemorySizeBits = options.LogSettings.PageSizeBits + 2;
-                options.LogSettings.SegmentSizeBits = options.LogSettings.MemorySizeBits + 2;
                 options.DeleteOnClose = true;
             });
             provider = services.BuildServiceProvider();
@@ -269,7 +265,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 
         // memory size is PageSizeBits+2
         //init with trash, up to the memory->disk transition size
-        byte[] trashData = new byte[1 << (PageSizeBits - 2)];
+        byte[] trashData = new byte[33554432L];
         Random.Shared.NextBytes(trashData);
         List<string> trashKeys = [];
         for (int i = 0; i < 16; i++)
@@ -368,7 +364,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var original = Guid.NewGuid().ToByteArray();
         // memory size is PageSizeBits+2
         //init with trash, up to the memory->disk transition size
-        byte[] trashData = new byte[1 << (PageSizeBits - 2)]; 
+        byte[] trashData = new byte[33554432L]; 
         Random.Shared.NextBytes(trashData);
         List<string> trashKeys = [];
         for (int i = 0; i < 16; i++)
@@ -449,7 +445,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         Assert.True(Directory.Exists(cacheFolder));
         var files = Directory.GetFiles(cacheFolder, "*.log*");
         int inititalCount = files.Length;
-        byte[] data = new byte[1 << (PageSizeBits - 1)]; // 32KiB segment size, pagesize is 4KiB, writing 2KiB
+        byte[] data = new byte[33554432L];
         Random.Shared.NextBytes(data);
         List<string> keys = [];
         for (int i = 0; i < 64; i++)

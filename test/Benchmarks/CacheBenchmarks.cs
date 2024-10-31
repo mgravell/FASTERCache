@@ -229,7 +229,7 @@ public class CacheBenchmarks : IDisposable
         ReadOnlySequence<byte> ros = new(payload);
         await cache.SetAsync(key, ros, Expiry);
     }
-
+    /*
     [Benchmark]
     public int FASTER_S_Get() => Get(_fasterSlide);
     
@@ -262,7 +262,7 @@ public class CacheBenchmarks : IDisposable
 
     [Benchmark]
     public void FASTER_NS_Set() => Set(_fasterNoSlide);
-
+    */
     [Benchmark]
     public int FASTER_NS_GetBuffer() => GetBuffer(_fasterBufferNoSlide);
 
@@ -271,7 +271,7 @@ public class CacheBenchmarks : IDisposable
 
     [Benchmark]
     public void FASTER_NS_SetBuffer() => SetBuffer(_fasterBufferNoSlide);
-
+    /*
     [Benchmark]
     public ValueTask<int> FASTER_NS_GetAsync() => GetAsync(_fasterNoSlide);
     [Benchmark]
@@ -337,4 +337,5 @@ public class CacheBenchmarks : IDisposable
     [Benchmark]
     public Task Rocks_SetAsync() => SetAsync(_rocks);
 #endif
+*/
 }
