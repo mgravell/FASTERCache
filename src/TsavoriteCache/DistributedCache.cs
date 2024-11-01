@@ -455,6 +455,7 @@ internal sealed partial class DistributedCache : CacheBase, ITsavoriteDistribute
         }
     }
 
+#if NET9_0_OR_GREATER
     ValueTask<bool> IBufferDistributedCache.TryGetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
     {
         var input = BasicInput(target);
@@ -472,7 +473,7 @@ internal sealed partial class DistributedCache : CacheBase, ITsavoriteDistribute
 
     void IBufferDistributedCache.Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
         => Write(key, value, options);
-
+#endif
 
     private ConcurrentBag<ClientSession<SpanByte, SpanByte, TInput, TOutput, Empty, TFunctions, SpanByteStoreFunctions, SpanByteAllocator>> GetSessionBag<TInput, TOutput, TFunctions>()
         where TFunctions : ISessionFunctions<SpanByte, SpanByte, TInput, TOutput, Empty>

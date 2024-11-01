@@ -23,20 +23,23 @@ public static class TsavoriteCacheServiceExtensions
         {
             return TsavoriteCache.Get(key, state, deserializer);
         }
+#if NET9_0_OR_GREATER
         if (cache is IBufferDistributedCache bufferCache)
         {
             return bufferCache.Get(key, state, deserializer);
         }
+#endif
         var arr = cache.Get(key);
         return arr is null ? default : deserializer(state, new(arr));
     }
 
+#if NET9_0_OR_GREATER
     private static TValue? Get<TState, TValue>(this IBufferDistributedCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
     {
         var bw = new ArrayBufferWriter<byte>(); // TODO: recycling
         return cache.TryGet(key, bw) ? deserializer(state, new(bw.WrittenMemory)) : default;
     }
-
+#endif
     public static ValueTask<TValue?> GetAsync<TState, TValue>(this IDistributedCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token = default)
     {
         if (cache is ITsavoriteDistributedCache TsavoriteCache)
@@ -44,10 +47,12 @@ public static class TsavoriteCacheServiceExtensions
             return TsavoriteCache.GetAsync(key, state, deserializer, token);
         }
 
+#if NET9_0_OR_GREATER
         if (cache is IBufferDistributedCache bufferCache)
         {
             return bufferCache.GetAsync(key, state, deserializer, token);
         }
+#endif
         var pending = cache.GetAsync(key, token);
         if (!pending.IsCompletedSuccessfully) return Awaited(pending, state, deserializer);
 
@@ -61,6 +66,7 @@ public static class TsavoriteCacheServiceExtensions
         }
     }
 
+#if NET9_0_OR_GREATER
     private static ValueTask<TValue?> GetAsync<TState, TValue>(this IBufferDistributedCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token = default)
     {
         var bw = new ArrayBufferWriter<byte>(); // TODO: recycling
@@ -74,6 +80,7 @@ public static class TsavoriteCacheServiceExtensions
             return await pending ? deserializer(state, new(bw.WrittenMemory)) : default;
         }
     }
+#endif
 
     public static void AddTsavoriteCache(this IServiceCollection services, Action<TsavoriteCacheOptions> setupAction)
     {
