@@ -21,7 +21,8 @@
         <DebugSymbols>true</DebugSymbols>
         <DebugType>embedded</DebugType>
         <DefaultLanguage>en-US</DefaultLanguage>
-        <IncludeSymbols>false</IncludeSymbols>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <IsTestProject>$(MSBuildProjectName.Contains('Test'))</IsTestProject>
         <CheckEolTargetFramework>false</CheckEolTargetFramework>
         <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
