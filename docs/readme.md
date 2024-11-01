@@ -1,15 +1,16 @@
-﻿# FASTERCache
+﻿# TsavoriteCache
 
-FASTERCache is an `IDistributedCache` implementation using [FASTER](https://github.com/microsoft/FASTER),
-providing a file-based local cache that persists between application executions.
+TsavoriteCache is an `IDistributedCache` implementation using Tsavorite, the storage and query engine
+behind [Garnet](https://github.com/microsoft/Garnet) (a RESP server in .NET), providing a file-based
+local cache that persists between application executions.
 
 ## Usage
 
 ``` c#
-services.AddFASTERCache(options =>
+services.AddTsavoriteCache(options =>
 {
-    // configure
-    options.Directory = "cache";
+    // optionally configure
+    options.Settings = new(baseDir: "cache");
 });
 ```
 

@@ -15,36 +15,36 @@ using SpanByteStoreFunctions = Tsavorite.core.StoreFunctions<Tsavorite.core.Span
 using SpanByteAllocator = Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>;
 
 using BooleanSession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte,
-    FASTERCache.DistributedCache.BasicInputContext, bool, Tsavorite.core.Empty,
-    FASTERCache.DistributedCache.BooleanFunctions,
+    TsavoriteCache.DistributedCache.BasicInputContext, bool, Tsavorite.core.Empty,
+    TsavoriteCache.DistributedCache.BooleanFunctions,
     Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>,
     Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>>;
 
 using ByteArraySession = Tsavorite.core.ClientSession<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte,
-    FASTERCache.DistributedCache.BasicInputContext, byte[], Tsavorite.core.Empty,
-    FASTERCache.DistributedCache.ByteArrayFunctions,
+    TsavoriteCache.DistributedCache.BasicInputContext, byte[], Tsavorite.core.Empty,
+    TsavoriteCache.DistributedCache.ByteArrayFunctions,
     Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>,
     Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>>;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 
 /// <summary>
 /// Implements IDistributedCache
 /// </summary>
-internal sealed partial class DistributedCache : CacheBase, IFASTERDistributedCache, IDisposable
+internal sealed partial class DistributedCache : CacheBase, ITsavoriteDistributedCache, IDisposable
 {
     public bool SlidingExpiration { get; set; }
     protected override byte KeyPrefix => (byte)'D';
 
     // heavily influenced by https://github.com/microsoft/FASTER/blob/main/cs/samples/CacheStore/
 
-    public DistributedCache(CacheService cacheService, IServiceProvider services, IOptions<FASTERCacheOptions> options)
+    public DistributedCache(CacheService cacheService, IServiceProvider services, IOptions<TsavoriteCacheOptions> options)
         : this(options.Value, cacheService, GetClockObject(services))
     { }
 
 
-    internal DistributedCache(FASTERCacheOptions options, CacheService cacheService, object? clock) : base(cacheService, clock)
+    internal DistributedCache(TsavoriteCacheOptions options, CacheService cacheService, object? clock) : base(cacheService, clock)
     {
         SlidingExpiration = options.SlidingExpiration;
     }
@@ -388,7 +388,7 @@ internal sealed partial class DistributedCache : CacheBase, IFASTERDistributedCa
     {
         Debug.WriteLine($"{method}: {status}");
         if (status.IsFaulted) Throw(method);
-        static void Throw(string method) => throw new InvalidOperationException("FASTER call faulted: " + method);
+        static void Throw(string method) => throw new InvalidOperationException("Tsavorite call faulted: " + method);
     }
     Task IDistributedCache.SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token)
         => WriteAsync(key, new(value), options, token).AsTask();
@@ -547,14 +547,14 @@ internal sealed partial class DistributedCache : CacheBase, IFASTERDistributedCa
         public override void Unpin() { }
 
     }
-    TValue? IFASTERDistributedCache.Get<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer) where TValue : default
+    TValue? ITsavoriteDistributedCache.Get<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer) where TValue : default
     {
         var sessions = GetSessionBag<InPlaceReadInput<TState, TValue>, TValue, InPlaceReadInput<TState, TValue>.Functions>();
         var input = new InPlaceReadInput<TState, TValue>(Clock.NowTicks, in state, deserializer);
         return Get(sessions, InPlaceReadInput<TState, TValue>.Functions.Instance, key, ref input);
     }
 
-    ValueTask<TValue?> IFASTERDistributedCache.GetAsync<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token) where TValue : default
+    ValueTask<TValue?> ITsavoriteDistributedCache.GetAsync<TState, TValue>(string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token) where TValue : default
     {
         var sessions = GetSessionBag<InPlaceReadInput<TState, TValue>, TValue, InPlaceReadInput<TState, TValue>.Functions>();
         var input = new InPlaceReadInput<TState, TValue>(Clock.NowTicks, in state, deserializer);

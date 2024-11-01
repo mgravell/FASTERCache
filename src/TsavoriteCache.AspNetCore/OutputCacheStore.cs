@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.OutputCaching;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 internal sealed partial class OutputCacheStore : CacheBase, IOutputCacheStore
 {

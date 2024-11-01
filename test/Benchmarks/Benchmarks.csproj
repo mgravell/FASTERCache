@@ -2,9 +2,10 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-
         <!-- options: REDIS;GARNET -->
         <DefineConstants>$(DefineConstants);GARNET</DefineConstants>
+
+        <NoWarn>$(NoWarn);CS8002</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
@@ -17,7 +18,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\src\FASTERCache\FASTERCache.csproj" />
+        <ProjectReference Include="..\..\src\TsavoriteCache\TsavoriteCache.csproj" />
     </ItemGroup>
 
 </Project>

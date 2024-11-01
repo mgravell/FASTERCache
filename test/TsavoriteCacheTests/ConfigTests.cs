@@ -2,7 +2,7 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 public class ConfigTests
 {
@@ -11,7 +11,7 @@ public class ConfigTests
     {
         var services = new ServiceCollection();
         bool configured = false;
-        services.AddFASTERDistributedCache(options =>
+        services.AddTsavoriteDistributedCache(options =>
         {
             options.Settings = new("cachedir", deleteDirOnDispose: true);
             configured = true;
@@ -29,7 +29,7 @@ public class ConfigTests
     [Fact]
     public void CanCreateWithBuilder()
     {
-        var cache = new FASTERCacheBuilder(new("dummy", deleteDirOnDispose: true)).CreateDistributedCache();
+        var cache = new TsavoriteCacheBuilder(new("dummy", deleteDirOnDispose: true)).CreateDistributedCache();
         DistributedCache typed;
         using (cache as IDisposable)
         {

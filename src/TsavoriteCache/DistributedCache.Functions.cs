@@ -4,7 +4,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 partial class DistributedCache
 {

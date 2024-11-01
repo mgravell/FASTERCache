@@ -1,7 +1,7 @@
 ﻿using System;
 using Tsavorite.core;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 /// <summary>
 /// Provides basic SpanByte-compatible function implementation

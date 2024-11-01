@@ -10,7 +10,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Xunit.Abstractions;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 {
@@ -45,7 +45,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 #else
             services.AddSingleton<ISystemClock>(time);
 #endif
-            services.AddFASTERDistributedCache(options =>
+            services.AddTsavoriteDistributedCache(options =>
             {
                 options.Settings = new(baseDir: "cachedir");
             });
@@ -85,13 +85,13 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var key = Caller(sliding);
         Assert.Null(Cache.Get(key));
 
-        var faster = Assert.IsAssignableFrom<IFASTERDistributedCache>(Cache);
-        string? s = faster.Get(key, 42, Deserializer);
+        var tsav = Assert.IsAssignableFrom<ITsavoriteDistributedCache>(Cache);
+        string? s = tsav.Get(key, 42, Deserializer);
         Assert.Null(s);
 
         var original = Guid.NewGuid().ToString();
         Cache.Set(key, Encoding.UTF8.GetBytes(original));
-        s = faster.Get(key, 42, Deserializer);
+        s = tsav.Get(key, 42, Deserializer);
         Assert.Equal("42:" + original, s);
         WriteStats();
     }
@@ -444,7 +444,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var cacheFolder = Path.Join(Environment.CurrentDirectory, "cachedir");
         Assert.True(Directory.Exists(cacheFolder));
         var files = Directory.GetFiles(cacheFolder, "*.log*");
-        int inititalCount = files.Length;
+        int initialCount = files.Length;
         byte[] data = new byte[DefaultPageSize / 8];
         Random.Shared.NextBytes(data);
         List<string> keys = [];
@@ -466,6 +466,6 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         files = Directory.GetFiles(cacheFolder, "*.log*");
         Assert.NotEmpty(files);
         int afterSetCount = files.Length;
-        Assert.True(afterSetCount > inititalCount);
+        Assert.True(afterSetCount > initialCount);
     }
 }

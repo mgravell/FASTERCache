@@ -3,18 +3,18 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>disable</ImplicitUsings>
         <TargetFrameworks>net8.0</TargetFrameworks>
-        <RootNamespace>FASTERCache</RootNamespace>
+        <RootNamespace>TsavoriteCache</RootNamespace>
         <Authors>Marc Gravell</Authors>
         <OutputType>Library</OutputType>
         <SignAssembly>true</SignAssembly>
         <DelaySign>False</DelaySign>
-        <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)FASTERCache.snk</AssemblyOriginatorKeyFile>
+        <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)TsavoriteCache.snk</AssemblyOriginatorKeyFile>
         <Copyright>Marc Gravell, 2024-</Copyright>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageProjectUrl>https://github.com/mgravell/FASTERCache</PackageProjectUrl>
         <RepositoryUrl>https://github.com/mgravell/FASTERCache</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
-        <Product>FASTERCache ($(TargetFramework))</Product>
+        <Product>TsavoriteCache ($(TargetFramework))</Product>
         <PackageReleaseNotes>https://github.com/mgravell/FASTERCache/releases/</PackageReleaseNotes>
         <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
         <PackageTags>grpc</PackageTags>

@@ -1,6 +1,6 @@
 ﻿using System.Buffers;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 partial class DistributedCache
 {

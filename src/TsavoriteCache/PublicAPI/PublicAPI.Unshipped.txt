@@ -1,0 +1,20 @@
+﻿#nullable enable
+TsavoriteCache.TsavoriteCacheBuilder
+TsavoriteCache.TsavoriteCacheBuilder.TsavoriteCacheBuilder() -> void
+TsavoriteCache.TsavoriteCacheBuilder.TsavoriteCacheBuilder(Tsavorite.core.KVSettings<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte>! settings) -> void
+TsavoriteCache.TsavoriteCacheBuilder.WithClock(Microsoft.Extensions.Internal.ISystemClock! clock) -> TsavoriteCache.TsavoriteCacheBuilder!
+TsavoriteCache.TsavoriteCacheBuilder.WithLogger(Microsoft.Extensions.Logging.ILogger! logger) -> TsavoriteCache.TsavoriteCacheBuilder!
+TsavoriteCache.TsavoriteCacheBuilder.WithLogger(Microsoft.Extensions.Logging.ILoggerFactory! logger) -> TsavoriteCache.TsavoriteCacheBuilder!
+TsavoriteCache.TsavoriteCacheBuilder.WithOptions(System.Action<TsavoriteCache.TsavoriteCacheOptions!>! action) -> TsavoriteCache.TsavoriteCacheBuilder!
+TsavoriteCache.TsavoriteCacheBuilder.WithSettings(Tsavorite.core.KVSettings<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte>? settings) -> TsavoriteCache.TsavoriteCacheBuilder!
+TsavoriteCache.TsavoriteCacheOptions
+TsavoriteCache.TsavoriteCacheOptions.TsavoriteCacheOptions() -> void
+TsavoriteCache.TsavoriteCacheOptions.Settings.get -> Tsavorite.core.KVSettings<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte>?
+TsavoriteCache.TsavoriteCacheOptions.Settings.set -> void
+TsavoriteCache.TsavoriteCacheOptions.SlidingExpiration.get -> bool
+TsavoriteCache.TsavoriteCacheOptions.SlidingExpiration.set -> void
+Microsoft.Extensions.DependencyInjection.TsavoriteCacheServiceExtensions
+static Microsoft.Extensions.DependencyInjection.TsavoriteCacheServiceExtensions.AddTsavoriteCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<TsavoriteCache.TsavoriteCacheOptions!>! setupAction) -> void
+static Microsoft.Extensions.DependencyInjection.TsavoriteCacheServiceExtensions.AddTsavoriteDistributedCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<TsavoriteCache.TsavoriteCacheOptions!>? setupAction = null) -> void
+static Microsoft.Extensions.DependencyInjection.TsavoriteCacheServiceExtensions.Get<TState, TValue>(this Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, string! key, in TState state, System.Func<TState, System.Buffers.ReadOnlySequence<byte>, TValue>! deserializer) -> TValue?
+static Microsoft.Extensions.DependencyInjection.TsavoriteCacheServiceExtensions.GetAsync<TState, TValue>(this Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, string! key, in TState state, System.Func<TState, System.Buffers.ReadOnlySequence<byte>, TValue>! deserializer, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<TValue?>

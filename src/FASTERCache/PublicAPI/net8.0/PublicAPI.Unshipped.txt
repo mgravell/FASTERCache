@@ -1,3 +1,0 @@
-﻿#nullable enable
-FASTERCache.FASTERCacheBuilder.CreateDistributedCache() -> FASTERCache.IFASTERDistributedCache!
-FASTERCache.FASTERCacheBuilder.WithClock(System.TimeProvider! clock) -> FASTERCache.FASTERCacheBuilder!

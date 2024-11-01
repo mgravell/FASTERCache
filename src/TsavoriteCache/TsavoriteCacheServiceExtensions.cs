@@ -1,4 +1,4 @@
-﻿using FASTERCache;
+﻿using TsavoriteCache;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using System;
@@ -7,19 +7,21 @@ using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 
+#pragma warning disable IDE0130 // Namespace does not match folder structure
 namespace Microsoft.Extensions.DependencyInjection;
+#pragma warning restore IDE0130 // Namespace does not match folder structure
 
 /// <summary>
-/// Allows FASTER to be used with dependency injection
+/// Allows Tsavorite to be used with dependency injection
 /// </summary>
 [Experimental("FCACHE002")]
-public static class FASTERCacheServiceExtensions
+public static class TsavoriteCacheServiceExtensions
 {
     public static TValue? Get<TState, TValue>(this IDistributedCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer)
     {
-        if (cache is IFASTERDistributedCache fasterCache)
+        if (cache is ITsavoriteDistributedCache TsavoriteCache)
         {
-            return fasterCache.Get(key, state, deserializer);
+            return TsavoriteCache.Get(key, state, deserializer);
         }
         if (cache is IBufferDistributedCache bufferCache)
         {
@@ -37,9 +39,9 @@ public static class FASTERCacheServiceExtensions
 
     public static ValueTask<TValue?> GetAsync<TState, TValue>(this IDistributedCache cache, string key, in TState state, Func<TState, ReadOnlySequence<byte>, TValue> deserializer, CancellationToken token = default)
     {
-        if (cache is IFASTERDistributedCache fasterCache)
+        if (cache is ITsavoriteDistributedCache TsavoriteCache)
         {
-            return fasterCache.GetAsync(key, state, deserializer, token);
+            return TsavoriteCache.GetAsync(key, state, deserializer, token);
         }
 
         if (cache is IBufferDistributedCache bufferCache)
@@ -73,7 +75,7 @@ public static class FASTERCacheServiceExtensions
         }
     }
 
-    public static void AddFASTERCache(this IServiceCollection services, Action<FASTERCacheOptions> setupAction)
+    public static void AddTsavoriteCache(this IServiceCollection services, Action<TsavoriteCacheOptions> setupAction)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(setupAction);
@@ -81,13 +83,14 @@ public static class FASTERCacheServiceExtensions
         if (setupAction is not null)
         {
             services.Configure(setupAction)
-                .AddOptionsWithValidateOnStart<FASTERCacheOptions, FASTERCacheOptions.Validator>();
+                .AddOptionsWithValidateOnStart<TsavoriteCacheOptions, TsavoriteCacheOptions.Validator>();
         }
         services.TryAddSingleton<CacheService>();
     }
-    public static void AddFASTERDistributedCache(this IServiceCollection services, Action<FASTERCacheOptions>? setupAction = null)
+
+    public static void AddTsavoriteDistributedCache(this IServiceCollection services, Action<TsavoriteCacheOptions>? setupAction = null)
     {
-        AddFASTERCache(services, setupAction!); // the shared core handles null (for reuse scenarios)
+        AddTsavoriteCache(services, setupAction!); // the shared core handles null (for reuse scenarios)
         services.TryAddSingleton<IDistributedCache, DistributedCache>();
     }
 }

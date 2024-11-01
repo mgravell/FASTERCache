@@ -3,7 +3,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 partial class DistributedCache
 {

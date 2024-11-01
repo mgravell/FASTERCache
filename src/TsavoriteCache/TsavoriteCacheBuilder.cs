@@ -4,56 +4,56 @@ using Microsoft.Extensions.Logging;
 using System;
 using Tsavorite.core;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 /// <summary>
 /// Allows creation of cache instances without requiring dependency injection services
 /// </summary>
-public sealed class FASTERCacheBuilder
+public sealed class TsavoriteCacheBuilder
 {
-    public FASTERCacheBuilder() { }
-    public FASTERCacheBuilder(KVSettings<SpanByte, SpanByte> settings) => _options.Settings = settings;
+    public TsavoriteCacheBuilder() { }
+    public TsavoriteCacheBuilder(KVSettings<SpanByte, SpanByte> settings) => _options.Settings = settings;
 
     private CacheService? _service;
-    private readonly FASTERCacheOptions _options = new();
+    private readonly TsavoriteCacheOptions _options = new();
     private object? _clock, _logger;
-    internal FASTERCacheOptions Options => _options;
-    public FASTERCacheBuilder WithOptions(Action<FASTERCacheOptions> action)
+    internal TsavoriteCacheOptions Options => _options;
+    public TsavoriteCacheBuilder WithOptions(Action<TsavoriteCacheOptions> action)
     {
         if (action is null) throw new ArgumentNullException(nameof(action));
         action(_options);
         return this;
     }
-    public FASTERCacheBuilder WithSettings(KVSettings<SpanByte, SpanByte>? settings)
+    public TsavoriteCacheBuilder WithSettings(KVSettings<SpanByte, SpanByte>? settings)
     {
         _options.Settings = settings;
         return this;
     }
-    public FASTERCacheBuilder WithClock(ISystemClock clock)
+    public TsavoriteCacheBuilder WithClock(ISystemClock clock)
     {
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         return this;
     }
     internal object? Clock => _clock;
 
-    public FASTERCacheBuilder WithLogger(ILogger logger)
+    public TsavoriteCacheBuilder WithLogger(ILogger logger)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         return this;
     }
-    public FASTERCacheBuilder WithLogger(ILoggerFactory logger)
+    public TsavoriteCacheBuilder WithLogger(ILoggerFactory logger)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         return this;
     }
 
 #if NET8_0_OR_GREATER
-    public FASTERCacheBuilder WithClock(TimeProvider clock)
+    public TsavoriteCacheBuilder WithClock(TimeProvider clock)
     {
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         return this;
     }
 #endif
     internal CacheService GetCacheService() => _service ??= new(Options, _logger);
-    public IFASTERDistributedCache CreateDistributedCache() => new DistributedCache(Options, GetCacheService(), _clock);
+    public ITsavoriteDistributedCache CreateDistributedCache() => new DistributedCache(Options, GetCacheService(), _clock);
 }

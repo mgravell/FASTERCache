@@ -5,21 +5,21 @@ using Tsavorite.core;
 using SpanByteAllocator = Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>;
 using SpanByteStoreFunctions = Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>;
 
-namespace FASTERCache;
+namespace TsavoriteCache;
 
 /// <summary>
-/// Holds the actual FASTER kv store; a single store can be shared between multiple
+/// Holds the actual Tsavorite kv store; a single store can be shared between multiple
 /// cache implementations, for example "distributed cache" and "output cache", with
-/// some ref-counting via AddRef/RemoveRef for disposabl
+/// some ref-counting via AddRef/RemoveRef for disposable.
 /// </summary>
 internal sealed class CacheService
 {
     private readonly TsavoriteKV<SpanByte, SpanByte, SpanByteStoreFunctions, SpanByteAllocator> _cache;
 
-    public CacheService(IOptions<FASTERCacheOptions> options, ILogger<CacheService> logger)
+    public CacheService(IOptions<TsavoriteCacheOptions> options, ILogger<CacheService> logger)
         : this(options.Value, logger) { }
 
-    internal CacheService(FASTERCacheOptions config, object? logger)
+    internal CacheService(TsavoriteCacheOptions config, object? logger)
     {
         var settings = config.Settings ?? new();
 

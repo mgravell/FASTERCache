@@ -4,7 +4,7 @@ using System.Buffers;
 using System.IO.Pipelines;
 using System.Threading;
 using System.Threading.Tasks;
-namespace FASTERCache;
+namespace TsavoriteCache;
 #if NET8_0_OR_GREATER
 internal sealed partial class OutputCacheStore : IOutputCacheBufferStore
 {

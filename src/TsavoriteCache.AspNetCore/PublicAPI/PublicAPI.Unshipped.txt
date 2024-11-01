@@ -1,0 +1,5 @@
+﻿#nullable enable
+TsavoriteCache.TsavoriteCacheBuilderExtensions
+Microsoft.Extensions.DependencyInjection.TsavoriteOutputCacheServiceExtensions
+static TsavoriteCache.TsavoriteCacheBuilderExtensions.CreateOutputCacheStore(this TsavoriteCache.TsavoriteCacheBuilder! builder) -> Microsoft.AspNetCore.OutputCaching.IOutputCacheStore!
+static Microsoft.Extensions.DependencyInjection.TsavoriteOutputCacheServiceExtensions.AddTsavoriteOutputCacheStore(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<TsavoriteCache.TsavoriteCacheOptions!>? setupAction = null) -> void
