@@ -99,9 +99,14 @@ partial class DistributedCache
             => true;
         public override bool CopyUpdater(ref SpanByte key, ref TInput input, ref SpanByte oldValue, ref SpanByte newValue, ref TOutput output, ref RMWInfo rmwInfo, ref RecordInfo recordInfo)
             => DoSafeCopy(ref oldValue, ref newValue, ref rmwInfo, ref recordInfo) && InPlaceUpdater(ref key, ref input, ref newValue, ref output, ref rmwInfo, ref recordInfo);
+
         public override int GetRMWInitialValueLength(ref TInput input)
             => 12;
+
         public override int GetRMWModifiedValueLength(ref SpanByte value, ref TInput input)
             => value.Length;
+
+        public override int GetUpsertValueLength(ref SpanByte value, ref TInput input)
+            => value.TotalSize;
     }
 }

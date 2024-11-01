@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using System;
+using Tsavorite.core;
 
 namespace FASTERCache;
 
@@ -10,20 +11,22 @@ namespace FASTERCache;
 /// </summary>
 public sealed class FASTERCacheBuilder
 {
-    public FASTERCacheBuilder(string directory)
-    {
-        if (directory is null) throw new ArgumentNullException(nameof(directory));
-        if (string.IsNullOrWhiteSpace(directory)) throw new ArgumentOutOfRangeException(nameof(directory));
-        _options = new FASTERCacheOptions { Directory = directory };
-    }
+    public FASTERCacheBuilder() { }
+    public FASTERCacheBuilder(KVSettings<SpanByte, SpanByte> settings) => _options.Settings = settings;
+
     private CacheService? _service;
-    private readonly FASTERCacheOptions _options;
+    private readonly FASTERCacheOptions _options = new();
     private object? _clock, _logger;
     internal FASTERCacheOptions Options => _options;
     public FASTERCacheBuilder WithOptions(Action<FASTERCacheOptions> action)
     {
         if (action is null) throw new ArgumentNullException(nameof(action));
-        action(Options);
+        action(_options);
+        return this;
+    }
+    public FASTERCacheBuilder WithSettings(KVSettings<SpanByte, SpanByte>? settings)
+    {
+        _options.Settings = settings;
         return this;
     }
     public FASTERCacheBuilder WithClock(ISystemClock clock)

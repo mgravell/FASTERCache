@@ -1,11 +1,9 @@
-﻿using Tsavorite.core;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
-using System.IO;
-
-using SpanByteStoreFunctions = Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>;
+using Tsavorite.core;
 using SpanByteAllocator = Tsavorite.core.SpanByteAllocator<Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>>;
+using SpanByteStoreFunctions = Tsavorite.core.StoreFunctions<Tsavorite.core.SpanByte, Tsavorite.core.SpanByte, Tsavorite.core.SpanByteComparer, Tsavorite.core.SpanByteRecordDisposer>;
 
 namespace FASTERCache;
 
@@ -23,20 +21,18 @@ internal sealed class CacheService
 
     internal CacheService(FASTERCacheOptions config, object? logger)
     {
-        var path = config.Directory;
-        if (!Directory.Exists(path))
+        var settings = config.Settings ?? new();
+
+        if (logger is not null && settings.logger is null && settings.loggerFactory is null)
         {
-            Directory.CreateDirectory(path);
+            // setup logger
+            settings.logger = logger as ILogger;
+            settings.loggerFactory = logger as ILoggerFactory;
         }
 
-        // create devices if not already specified
-        config.Settings.LogDevice ??= Devices.CreateLogDevice(Path.Combine(path, "hlog.log"), capacity: config.LogCapacity, deleteOnClose: config.DeleteOnClose);
-        // setup logger
-        config.Settings.logger = logger as ILogger;
-        config.Settings.loggerFactory = logger as ILoggerFactory;
         // Create instance of store
         _cache = new(
-            config.Settings,
+            settings,
             StoreFunctions<SpanByte, SpanByte>.Create(),
             static (settings, storeFunctions) => new SpanByteAllocator<SpanByteStoreFunctions>(settings, storeFunctions));
 

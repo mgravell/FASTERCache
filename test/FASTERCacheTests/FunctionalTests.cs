@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Internal;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -15,6 +14,8 @@ namespace FASTERCache;
 
 public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 {
+    const long DefaultPageSize = 33554432L;
+
     public FunctionalTests(CacheInstance fixture, ITestOutputHelper log)
     {
         this.log = log;
@@ -24,7 +25,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
     private readonly CacheInstance fixture;
     private readonly ITestOutputHelper log;
     private IDistributedCache Cache => fixture.Cache;
-    private IExperimentalBufferCache BufferCache => fixture.BufferCache;
+    private IBufferDistributedCache BufferCache => fixture.BufferCache;
 
     public sealed class CacheInstance : IDisposable
     {
@@ -35,7 +36,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         public void SetTime(DateTimeOffset value) => time.Set(value);
         public void AddTime(TimeSpan value) => time.Add(value);
         public IDistributedCache Cache => cache;
-        internal IExperimentalBufferCache BufferCache => (IExperimentalBufferCache)cache;
+        internal IBufferDistributedCache BufferCache => (IBufferDistributedCache)cache;
         public CacheInstance()
         {
             var services = new ServiceCollection();
@@ -46,8 +47,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 #endif
             services.AddFASTERDistributedCache(options =>
             {
-                options.Directory = "cachedir";
-                options.DeleteOnClose = true;
+                options.Settings = new(baseDir: "cachedir");
             });
             provider = services.BuildServiceProvider();
             cache = provider.GetRequiredService<IDistributedCache>();
@@ -130,7 +130,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var key = Caller(sliding);
         var bw = new ArrayBufferWriter<byte>();
         Assert.Null(await Cache.GetAsync(key));
-        Assert.False(await BufferCache.GetAsync(key, bw));
+        Assert.False(await BufferCache.TryGetAsync(key, bw));
         Assert.Equal(0, bw.WrittenCount);
 
         var original = Guid.NewGuid().ToByteArray();
@@ -145,7 +145,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         Assert.NotNull(retrieved);
         Assert.Equal(original, retrieved);
 
-        Assert.True(await BufferCache.GetAsync(key, bw));
+        Assert.True(await BufferCache.TryGetAsync(key, bw));
         Assert.Equal(original, bw.WrittenSpan.ToArray());
 
         await Cache.RemoveAsync(key);
@@ -265,7 +265,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
 
         // memory size is PageSizeBits+2
         //init with trash, up to the memory->disk transition size
-        byte[] trashData = new byte[33554432L];
+        byte[] trashData = new byte[DefaultPageSize / 8];
         Random.Shared.NextBytes(trashData);
         List<string> trashKeys = [];
         for (int i = 0; i < 16; i++)
@@ -364,7 +364,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         var original = Guid.NewGuid().ToByteArray();
         // memory size is PageSizeBits+2
         //init with trash, up to the memory->disk transition size
-        byte[] trashData = new byte[33554432L]; 
+        byte[] trashData = new byte[DefaultPageSize / 8]; 
         Random.Shared.NextBytes(trashData);
         List<string> trashKeys = [];
         for (int i = 0; i < 16; i++)
@@ -445,7 +445,7 @@ public class FunctionalTests : IClassFixture<FunctionalTests.CacheInstance>
         Assert.True(Directory.Exists(cacheFolder));
         var files = Directory.GetFiles(cacheFolder, "*.log*");
         int inititalCount = files.Length;
-        byte[] data = new byte[33554432L];
+        byte[] data = new byte[DefaultPageSize / 8];
         Random.Shared.NextBytes(data);
         List<string> keys = [];
         for (int i = 0; i < 64; i++)

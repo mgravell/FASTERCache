@@ -2,8 +2,9 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <!-- GARNET currently blocked on https://github.com/dotnet/aspnetcore/pull/54689 -->
-        <DefineConstants>$(DefineConstants);REDIS</DefineConstants>
+
+        <!-- options: REDIS;GARNET -->
+        <DefineConstants>$(DefineConstants);GARNET</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>

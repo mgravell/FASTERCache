@@ -13,7 +13,7 @@ public class ConfigTests
         bool configured = false;
         services.AddFASTERDistributedCache(options =>
         {
-            options.Directory = "cachedir";
+            options.Settings = new("cachedir", deleteDirOnDispose: true);
             configured = true;
         });
         DistributedCache typed;
@@ -29,7 +29,7 @@ public class ConfigTests
     [Fact]
     public void CanCreateWithBuilder()
     {
-        var cache = new FASTERCacheBuilder("dummy").CreateDistributedCache();
+        var cache = new FASTERCacheBuilder(new("dummy", deleteDirOnDispose: true)).CreateDistributedCache();
         DistributedCache typed;
         using (cache as IDisposable)
         {

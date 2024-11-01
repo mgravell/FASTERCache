@@ -66,7 +66,7 @@ public class CacheBenchmarks : IDisposable
     {
         var services = new ServiceCollection();
         services.AddFASTERDistributedCache(options => {
-            options.Directory = "faster_slide";
+            options.Settings = new(baseDir: "faster_slide");
             options.SlidingExpiration = true;
         });
         _fasterSlide = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
@@ -74,7 +74,7 @@ public class CacheBenchmarks : IDisposable
 
         services = new ServiceCollection();
         services.AddFASTERDistributedCache(options => {
-            options.Directory = "faster_noslide";
+            options.Settings = new(baseDir: "faster_noslide");
             options.SlidingExpiration = false;
         });
         _fasterNoSlide = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
@@ -84,6 +84,10 @@ public class CacheBenchmarks : IDisposable
         services.AddSqliteCache(options => options.CachePath = @"sqlite.db", null!);
         _sqlite = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
 
+#if REDIS && GARNET
+#error Redis and Garnet currently use the same port; some configuration required!
+#endif
+
 #if REDIS
         services = new ServiceCollection();
         services.AddStackExchangeRedisCache(options => options.Configuration = "127.0.0.1:6379");
@@ -91,7 +95,7 @@ public class CacheBenchmarks : IDisposable
 #endif
 #if GARNET
         services = new ServiceCollection();
-        services.AddStackExchangeRedisCache(options => options.Configuration = "127.0.0.1:3278");
+        services.AddStackExchangeRedisCache(options => options.Configuration = "127.0.0.1:6379");
         _garnet = services.BuildServiceProvider().GetRequiredService<IDistributedCache>();
 #endif
 
@@ -119,16 +123,16 @@ public class CacheBenchmarks : IDisposable
     }
 
     private int Get(IDistributedCache cache) => Assert(cache.Get(key));
-    private int GetBuffer(IExperimentalBufferCache cache)
+    private int GetBuffer(IBufferDistributedCache cache)
     {
         using var bw = CountingBufferWriter.Create();
-        return Assert(cache.Get(key, bw) ? bw.Count : -1);
+        return Assert(cache.TryGet(key, bw) ? bw.Count : -1);
     }
 
     private int GetInPlace(IFASTERDistributedCache cache)
         => cache.Get(key, 0, static (_, payload) => (int)payload.Length);
 
-    private async ValueTask<int> GetAsync(IDistributedCache cache) => Assert(await cache.GetAsync(key));
+    private async ValueTask<int> GetAsync(IDistributedCache cache) => Assert(await cache.GetAsync(key, CancellationToken.None));
 
     internal sealed class CountingBufferWriter : IBufferWriter<byte>, IDisposable
     {
@@ -160,10 +164,10 @@ public class CacheBenchmarks : IDisposable
 
         public Span<byte> GetSpan(int sizeHint = 0) => _buffer;
     }
-    private ValueTask<int> GetAsyncBuffer(IExperimentalBufferCache cache)
+    private ValueTask<int> GetAsyncBuffer(IBufferDistributedCache cache)
     {
         var bw = CountingBufferWriter.Create();
-        var pending = cache.GetAsync(key, bw);
+        var pending = cache.TryGetAsync(key, bw, CancellationToken.None);
         if (!pending.IsCompletedSuccessfully) return Awaited(this, pending, bw);
         
         int count = pending.GetAwaiter().GetResult() ? bw.Count : -1;
@@ -180,7 +184,7 @@ public class CacheBenchmarks : IDisposable
     }
 
     private ValueTask<int> GetAsyncInPlace(IFASTERDistributedCache cache)
-        => cache.GetAsync(key, 0, static (_, payload) => (int)payload.Length);
+        => cache.GetAsync(key, 0, static (_, payload) => (int)payload.Length, CancellationToken.None);
 
     private int Assert(int length)
     {
@@ -205,7 +209,7 @@ public class CacheBenchmarks : IDisposable
         cache.Set(key, payload.ToArray(), Expiry);
     }
 
-    private void SetBuffer(IExperimentalBufferCache cache)
+    private void SetBuffer(IBufferDistributedCache cache)
     {
         // scramble slightly each time
         payload.Span[payload.Length / 2]++;
@@ -222,14 +226,14 @@ public class CacheBenchmarks : IDisposable
 
     private static readonly DistributedCacheEntryOptions Expiry = new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
 
-    private async Task SetAsyncBuffer(IExperimentalBufferCache cache)
+    private async Task SetAsyncBuffer(IBufferDistributedCache cache)
     {
         // scramble slightly each time
         payload.Span[payload.Length / 2]++;
         ReadOnlySequence<byte> ros = new(payload);
         await cache.SetAsync(key, ros, Expiry);
     }
-    /*
+
     [Benchmark]
     public int FASTER_S_Get() => Get(_fasterSlide);
     
@@ -262,7 +266,7 @@ public class CacheBenchmarks : IDisposable
 
     [Benchmark]
     public void FASTER_NS_Set() => Set(_fasterNoSlide);
-    */
+
     [Benchmark]
     public int FASTER_NS_GetBuffer() => GetBuffer(_fasterBufferNoSlide);
 
@@ -271,7 +275,7 @@ public class CacheBenchmarks : IDisposable
 
     [Benchmark]
     public void FASTER_NS_SetBuffer() => SetBuffer(_fasterBufferNoSlide);
-    /*
+
     [Benchmark]
     public ValueTask<int> FASTER_NS_GetAsync() => GetAsync(_fasterNoSlide);
     [Benchmark]
@@ -337,5 +341,4 @@ public class CacheBenchmarks : IDisposable
     [Benchmark]
     public Task Rocks_SetAsync() => SetAsync(_rocks);
 #endif
-*/
 }

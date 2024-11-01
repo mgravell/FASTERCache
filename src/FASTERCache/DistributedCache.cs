@@ -32,8 +32,7 @@ namespace FASTERCache;
 /// <summary>
 /// Implements IDistributedCache
 /// </summary>
-internal sealed partial class DistributedCache : CacheBase,
-    IFASTERDistributedCache, IDisposable
+internal sealed partial class DistributedCache : CacheBase, IFASTERDistributedCache, IDisposable
 {
     public bool SlidingExpiration { get; set; }
     protected override byte KeyPrefix => (byte)'D';
@@ -127,7 +126,7 @@ internal sealed partial class DistributedCache : CacheBase,
                 return Awaited(this, session, sessions, sliding, token);
             }
             Assert(status, sliding ? nameof(session.BasicContext.RMW) : nameof(session.BasicContext.Read));
-            OnDebugRMWComplete(status, async: true);
+            OnDebugRMWComplete(status, async: false);
             ReuseSession(sessions, session);
             return new(output);
         }
@@ -456,22 +455,22 @@ internal sealed partial class DistributedCache : CacheBase,
         }
     }
 
-    ValueTask<bool> IExperimentalBufferCache.GetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
+    ValueTask<bool> IBufferDistributedCache.TryGetAsync(string key, IBufferWriter<byte> target, CancellationToken token)
     {
         var input = BasicInput(target);
         return GetAsync(_booleanSessions, BooleanFunctions.Instance, key, ref input, token);
     }
 
-    ValueTask IExperimentalBufferCache.SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
+    ValueTask IBufferDistributedCache.SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
         => WriteAsync(key, value, options, token);
 
-    bool IExperimentalBufferCache.Get(string key, IBufferWriter<byte> target)
+    bool IBufferDistributedCache.TryGet(string key, IBufferWriter<byte> target)
     {
         var input = BasicInput(target);
         return Get(_booleanSessions, BooleanFunctions.Instance, key, ref input);
     }
 
-    void IExperimentalBufferCache.Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
+    void IBufferDistributedCache.Set(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options)
         => Write(key, value, options);
 
 
