@@ -1,3 +1,0 @@
-﻿#nullable enable
-TsavoriteCache.TsavoriteCacheBuilder.CreateDistributedCache() -> TsavoriteCache.ITsavoriteDistributedCache!
-TsavoriteCache.TsavoriteCacheBuilder.WithClock(System.TimeProvider! clock) -> TsavoriteCache.TsavoriteCacheBuilder!

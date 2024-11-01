@@ -2,7 +2,7 @@
     <PropertyGroup>
         <Nullable>enable</Nullable>
         <ImplicitUsings>disable</ImplicitUsings>
-        <TargetFrameworks>net8.0</TargetFrameworks>
+        <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
         <RootNamespace>TsavoriteCache</RootNamespace>
         <Authors>Marc Gravell</Authors>
         <OutputType>Library</OutputType>
@@ -26,7 +26,7 @@
         <CheckEolTargetFramework>false</CheckEolTargetFramework>
         <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
         <PackageReadmeFile>readme.md</PackageReadmeFile>
-        <LangVersion>12</LangVersion>
+        <LangVersion>13</LangVersion>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <NoWarn>$(NoWarn);FCACHE001;FCACHE002</NoWarn>
     </PropertyGroup>
