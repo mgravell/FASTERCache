@@ -11,11 +11,11 @@
         <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)TsavoriteCache.snk</AssemblyOriginatorKeyFile>
         <Copyright>Marc Gravell, 2024-</Copyright>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
-        <PackageProjectUrl>https://github.com/mgravell/FASTERCache</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/mgravell/FASTERCache</RepositoryUrl>
+        <PackageProjectUrl>https://github.com/mgravell/TsavoriteCache</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/mgravell/TsavoriteCache</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
         <Product>TsavoriteCache ($(TargetFramework))</Product>
-        <PackageReleaseNotes>https://github.com/mgravell/FASTERCache/releases/</PackageReleaseNotes>
+        <PackageReleaseNotes>https://github.com/mgravell/TsavoriteCache/releases/</PackageReleaseNotes>
         <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
         <PackageTags>grpc</PackageTags>
         <DebugSymbols>true</DebugSymbols>
