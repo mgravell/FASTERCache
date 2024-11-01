@@ -3,9 +3,11 @@ using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using System;
 
+#pragma warning disable IDE0079
 #pragma warning disable IDE0130 // Namespace does not match folder structure
 namespace Microsoft.Extensions.DependencyInjection;
 #pragma warning restore IDE0130 // Namespace does not match folder structure
+#pragma warning restore IDE0079
 
 /// <summary>
 /// Allows Tsavorite to be used with dependency injection

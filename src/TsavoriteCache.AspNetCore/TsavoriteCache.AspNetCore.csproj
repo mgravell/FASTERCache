@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    </PropertyGroup>
     <ItemGroup>
         <!-- APIs for all target frameworks -->
         <AdditionalFiles Include="PublicAPI/PublicAPI.*.txt" />

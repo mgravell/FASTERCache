@@ -17,7 +17,7 @@
         <Product>TsavoriteCache ($(TargetFramework))</Product>
         <PackageReleaseNotes>https://github.com/mgravell/TsavoriteCache/releases/</PackageReleaseNotes>
         <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-        <PackageTags>grpc</PackageTags>
+        <PackageTags>cache</PackageTags>
         <DebugSymbols>true</DebugSymbols>
         <DebugType>embedded</DebugType>
         <DefaultLanguage>en-US</DefaultLanguage>
